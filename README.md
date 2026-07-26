@@ -1,4 +1,4 @@
-# tiny-pdg-cs
+# tinypdg-cs
 
 C# program dependency graph builder. Parses C# source with tree-sitter, builds CFG and PDG, resolves calls through DI/reflection/CHA, and detects design patterns from structural and graph signals alone -- no naming heuristics.
 
@@ -83,7 +83,7 @@ The eShop reference application (494 C# files, 366 classes, 39 interfaces, 4791 
 Scan a project and get all detected patterns with confidence scores and evidence:
 
 ```
-$ tiny-pdg-cs detect src/Catalog.API
+$ tinypdg-cs detect src/Catalog.API
 Analysis of 39 file(s):
   Classes: 33, Interfaces: 2, Call sites: 706
 
@@ -100,7 +100,7 @@ Facade (2 hits):
 ```
 
 ```
-$ tiny-pdg-cs detect src/Ordering.API
+$ tinypdg-cs detect src/Ordering.API
 Analysis of 68 file(s):
   Classes: 79, Interfaces: 3, Call sites: 321
 
@@ -120,7 +120,7 @@ TemplateMethod (1 hits):
 Show what a class calls, what calls it, and trace interface dispatch to show all possible implementations and their internal call graphs:
 
 ```
-$ tiny-pdg-cs callgraph src/Catalog.API --class CatalogAI --trace
+$ tinypdg-cs callgraph src/Catalog.API --class CatalogAI --trace
 
 CALL GRAPH FOR: CatalogAI
 
@@ -148,7 +148,7 @@ The `!` suffix on `_embeddingGenerator!` marks an interface dispatch point. With
 ### Control Flow Graph
 
 ```
-$ tiny-pdg-cs cfg tests/fixtures/control_flow/if_else.cs
+$ tinypdg-cs cfg tests/fixtures/control_flow/if_else.cs
 digraph CFG {
   n0 [label="[0] Entry (L2-L7)"];
   n1 [label="[1] Exit (L2-L7)"];
@@ -166,7 +166,7 @@ digraph CFG {
 PDG extends CFG with control and data dependence edges:
 
 ```
-$ tiny-pdg-cs pdg tests/fixtures/control_flow/if_else.cs --format dot
+$ tinypdg-cs pdg tests/fixtures/control_flow/if_else.cs --format dot
 digraph PDG {
   n2 -> n4 [label="cfg(CondTrue)"];
   n2 -> n5 [label="cfg(CondFalse)"];
@@ -180,7 +180,7 @@ digraph PDG {
 Shows top called methods and their call sites across a project:
 
 ```
-$ tiny-pdg-cs resolve src/Catalog.API
+$ tinypdg-cs resolve src/Catalog.API
 Resolution analysis for 39 file(s):
   Classes: 33, Interfaces: 2, Call sites: 706
 
@@ -199,7 +199,7 @@ Top called methods:
 Dump the type graph as JSON for a single file:
 
 ```
-$ tiny-pdg-cs parse src/Catalog.API/Infrastructure/CatalogContext.cs
+$ tinypdg-cs parse src/Catalog.API/Infrastructure/CatalogContext.cs
 {
   "classes": {
     "CatalogContext": {
