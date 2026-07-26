@@ -1,0 +1,28 @@
+---
+source: tests/golden_tests.rs
+expression: cfg_to_dot(&g)
+---
+digraph {
+    0 [ label = "[0] Entry (L2-L8)" ]
+    1 [ label = "[1] Exit (L2-L8)" ]
+    2 [ label = "[2] Condition (L3-L7)" ]
+    3 [ label = "[3] Statement (L3-L7)" ]
+    4 [ label = "[4] Unknown (L4-L4)" ]
+    5 [ label = "[5] Statement (L4-L4)" ]
+    6 [ label = "[6] Unknown (L5-L5)" ]
+    7 [ label = "[7] Statement (L5-L5)" ]
+    8 [ label = "[8] Statement (L6-L6)" ]
+    2 -> 4 [ label = "CondTrue" ]
+    4 -> 3 [ label = "Seq" ]
+    2 -> 5 [ label = "CondTrue" ]
+    5 -> 3 [ label = "Seq" ]
+    2 -> 6 [ label = "CondTrue" ]
+    6 -> 3 [ label = "Seq" ]
+    2 -> 7 [ label = "CondTrue" ]
+    7 -> 3 [ label = "Seq" ]
+    2 -> 8 [ label = "CondTrue" ]
+    8 -> 3 [ label = "Seq" ]
+    2 -> 3 [ label = "CondFalse" ]
+    0 -> 2 [ label = "Seq" ]
+    3 -> 1 [ label = "Seq" ]
+}

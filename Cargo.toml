@@ -1,0 +1,28 @@
+[package]
+name = "tiny-pdg-cs"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "C# Program Dependence Graph (PDG) builder with tree-sitter, DI/Reflection call resolution, and hammock-block analysis"
+
+[dependencies]
+tree-sitter = "0.25"
+tree-sitter-c-sharp = "0.23"
+petgraph = "0.6"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+insta = "1"
+pretty_assertions = "1"
+
+[[bench]]
+name = "bench_pdg"
+path = "benches/bench_pdg.rs"
+harness = false

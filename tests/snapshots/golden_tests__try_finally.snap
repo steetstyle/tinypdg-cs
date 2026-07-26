@@ -1,0 +1,15 @@
+---
+source: tests/golden_tests.rs
+expression: cfg_to_dot(&g)
+---
+digraph {
+    0 [ label = "[0] Entry (L2-L9)" ]
+    1 [ label = "[1] Exit (L2-L9)" ]
+    2 [ label = "[2] Statement (L3-L3)" ]
+    3 [ label = "[3] Statement (L5-L5)" ]
+    4 [ label = "[4] Statement (L7-L7)" ]
+    3 -> 4 [ label = "Seq" ]
+    2 -> 3 [ label = "Seq" ]
+    0 -> 2 [ label = "Seq" ]
+    4 -> 1 [ label = "Seq" ]
+}

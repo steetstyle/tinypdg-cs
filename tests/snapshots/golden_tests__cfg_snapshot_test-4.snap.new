@@ -1,0 +1,14 @@
+---
+source: tests/golden_tests.rs
+assertion_line: 17
+expression: dot
+---
+digraph {
+    0 [ label = "[0] Entry (L2-L8)" ]
+    1 [ label = "[1] Exit (L2-L8)" ]
+    2 [ label = "[2] Statement (L4-L4)" ]
+    3 [ label = "[3] Statement (L6-L6)" ]
+    2 -> 3 [ label = "Throw" ]
+    0 -> 2 [ label = "Seq" ]
+    3 -> 1 [ label = "Seq" ]
+}
