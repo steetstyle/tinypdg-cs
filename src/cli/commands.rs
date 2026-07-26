@@ -323,7 +323,7 @@ pub fn handle_detect(path: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn handle_callgraph(path: &str, class: Option<&str>, _depth: usize, only_outbound: bool, only_inbound: bool) -> Result<()> {
+pub fn handle_callgraph(path: &str, class: Option<&str>, _depth: usize, only_outbound: bool, only_inbound: bool, trace: bool) -> Result<()> {
     let path = Path::new(path);
     if !path.exists() {
         anyhow::bail!("Path does not exist: {}", path.display());
@@ -434,6 +434,11 @@ pub fn handle_callgraph(path: &str, class: Option<&str>, _depth: usize, only_out
                                         format!(" via {}", via_types[0])
                                     };
                                     println!("    ├── {}{} ({}x)", callee, via, count);
+
+                                    // Trace: check if this callee is an interface method → show dispatch
+                                    if trace {
+                                        trace_dispatch(&tg, &cg, cn, method, callee, via_types.first().copied().unwrap_or(""));
+                                    }
                                 }
                         }
                     }
@@ -514,6 +519,58 @@ pub fn handle_callgraph(path: &str, class: Option<&str>, _depth: usize, only_out
         }
     }
     Ok(())
+}
+
+fn trace_dispatch(tg: &crate::resolve::types::TypeGraph, cg: &CallGraph,
+    _caller_class: &str, _caller_method: &str, callee: &str, target_expr: &str)
+{
+    let matching_interfaces: Vec<(String, Vec<String>)> = tg.interfaces.iter()
+        .filter(|(_, iface)| {
+            iface.methods.iter().any(|m| m.method == callee)
+        })
+        .map(|(name, _iface)| {
+            let impls: Vec<String> = tg.concrete_subclasses(name)
+                .iter().map(|c| c.name.clone()).collect();
+            (name.clone(), impls)
+        })
+        .filter(|(_, impls)| !impls.is_empty())
+        .collect();
+
+    if matching_interfaces.is_empty() { return; }
+
+    println!();
+    for (iface_name, implementors) in &matching_interfaces {
+        println!("    ══ DISPATCH TRACE: {} → {} ══", target_expr, iface_name);
+        println!("    Condition: {}.{}()", target_expr, callee);
+        println!("    Interface: {} ({} implementations)", iface_name, implementors.len());
+
+        for impl_class in implementors {
+            println!("\n    ── {} implements {} ──", impl_class, iface_name);
+            let impl_calls: Vec<_> = cg.calls.iter()
+                .filter(|c| c.caller_class == *impl_class)
+                .collect();
+
+            if impl_calls.is_empty() {
+                println!("      (no internal calls)");
+            } else {
+                let mut by_impl_method: HashMap<String, Vec<String>> = HashMap::new();
+                for c in &impl_calls {
+                    by_impl_method.entry(c.caller_method.clone()).or_default().push(c.callee.clone());
+                }
+                let mut impl_methods: Vec<String> = by_impl_method.keys().cloned().collect();
+                impl_methods.sort();
+                for im in &impl_methods {
+                    let im_callees = by_impl_method.get(im.as_str()).cloned().unwrap_or_default();
+                    let mut unique: Vec<String> = im_callees.clone();
+                    unique.sort();
+                    unique.dedup();
+                    let call_list: Vec<String> = unique.iter().map(|c| format!("{}()", c)).collect();
+                    println!("      {}() → {}", im, call_list.join(", "));
+                }
+            }
+        }
+        println!();
+    }
 }
 
 fn collect_cs_files(dir: &Path, files: &mut Vec<String>) {
