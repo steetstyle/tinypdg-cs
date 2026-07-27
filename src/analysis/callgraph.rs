@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use tree_sitter::Node;
 
-use crate::resolve::types::TypeGraph;
+use crate::resolve::types::{ClassInfo, TypeGraph};
 
 /// A method call site: who calls whom, and what type it's called on
 #[derive(Debug, Clone)]
@@ -23,6 +23,10 @@ pub struct CallSite {
     pub is_creation: bool,
     /// The type being constructed (if is_creation)
     pub created_type: Option<String>,
+    /// Source line number (1-indexed)
+    pub line: usize,
+    /// Delegate method names passed as arguments (e.g. MapPost("/path", CreateItem))
+    pub delegates: Vec<String>,
 }
 
 /// Call graph edges for a compilation unit
@@ -164,6 +168,10 @@ impl CallGraphBuilder {
         }
     }
 
+    fn caller_class_info<'a>(type_graph: &'a TypeGraph, caller_class: &str) -> Option<&'a ClassInfo> {
+        type_graph.classes.get(caller_class)
+    }
+
     fn extract_call(node: Node, source: &str, caller_class: &str, caller_method: &str, type_graph: &TypeGraph) -> Option<CallSite> {
         let mut callee = String::new();
         let mut target_expr = String::new();
@@ -244,6 +252,32 @@ impl CallGraphBuilder {
             }
         }
 
+        // Extract delegate methods from argument_list:
+        // e.g. MapPost("/path", CreateItem) → "CreateItem" is a delegate
+        let caller_class_info = Self::caller_class_info(type_graph, caller_class);
+        let mut delegates = Vec::new();
+        for i in 0..node.child_count() {
+            let child = node.child(i).unwrap();
+            if child.kind() == "argument_list" {
+                let mut a_cursor = child.walk();
+                for arg in child.children(&mut a_cursor) {
+                    if arg.kind() == "argument" {
+                        for j in 0..arg.child_count() {
+                            if let Some(gc) = arg.child(j) {
+                                if gc.kind() == "identifier" {
+                                    if let Ok(text) = gc.utf8_text(source.as_bytes()) {
+                                        if caller_class_info.map_or(false, |ci| ci.methods.iter().any(|m| m.method == text)) {
+                                            delegates.push(text.to_string());
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         let callee_class = if is_self_call || target_expr.is_empty() {
             // this.Foo() or Foo() (implicit this) → caller_class
             if type_graph.classes.get(caller_class)
@@ -277,6 +311,8 @@ impl CallGraphBuilder {
                 is_self_call,
                 is_creation,
                 created_type,
+                line: node.start_position().row + 1,
+                delegates,
             })
         }
     }

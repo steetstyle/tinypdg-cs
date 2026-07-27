@@ -84,6 +84,22 @@ impl SymbolTable {
         let mut methods = Vec::new();
         self.collect_methods(node, source, &mut methods);
 
+        // C# 12 primary constructor: class Foo(int x, string y) { ... }
+        // tree-sitter produces a `parameter_list` child on the class_declaration node
+        if has_parameter_list(node) {
+            methods.push(MethodDescriptor {
+                class: String::new(),
+                method: ".ctor".into(),
+                signature: format!(".ctor ({})", extract_parameter_types(node, source)),
+                is_static: false,
+                is_virtual: false,
+                is_abstract: false,
+                file: String::new(),
+                line_start: node.start_position().row + 1,
+                line_end: node.start_position().row + 1,
+            });
+        }
+
         let mut fields = Vec::new();
         self.collect_fields(node, source, &mut fields);
 
@@ -102,7 +118,18 @@ impl SymbolTable {
             is_static,
         };
 
-        self.type_graph.classes.insert(name.clone(), ci);
+        // Merge if class already exists (same name from another file/namespace)
+        if let Some(existing) = self.type_graph.classes.get_mut(&name) {
+            existing.methods.extend(ci.methods);
+            existing.fields.extend(ci.fields);
+            if ci.base_class.is_some() { existing.base_class = ci.base_class.clone(); }
+            existing.interfaces.extend(ci.interfaces.clone());
+            existing.is_abstract = existing.is_abstract || ci.is_abstract;
+            existing.is_sealed = existing.is_sealed || ci.is_sealed;
+            existing.is_static = existing.is_static || ci.is_static;
+        } else {
+            self.type_graph.classes.insert(name.clone(), ci);
+        }
         self.base_types.insert(name, base_types);
     }
 
@@ -208,6 +235,30 @@ impl SymbolTable {
             }
         }
     }
+}
+
+fn has_parameter_list(node: tree_sitter::Node) -> bool {
+    for i in 0..node.child_count() {
+        if let Some(child) = node.child(i) {
+            if child.kind() == "parameter_list" {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn extract_parameter_types(node: tree_sitter::Node, source: &str) -> String {
+    for i in 0..node.child_count() {
+        if let Some(child) = node.child(i) {
+            if child.kind() == "parameter_list" {
+                if let Ok(text) = child.utf8_text(source.as_bytes()) {
+                    return text.to_string();
+                }
+            }
+        }
+    }
+    String::new()
 }
 
 fn has_class_modifier(node: Node, source: &str, modifier: &str) -> bool {

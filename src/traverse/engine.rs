@@ -17,6 +17,8 @@ pub fn run(state: &mut TraversalState, tg: &TypeGraph, cg: &CallGraph) -> Result
         display::print_nav(&state.down, "↓");
         println!("  {} Up (called by):", "↑");
         display::print_nav(&state.up, "↑");
+        println!("  {} Dispatch (type-flow):", "⤴");
+        display::print_nav(&state.up_dispatch, "⤴");
 
         display::print_prompt();
 
@@ -79,8 +81,25 @@ pub fn run(state: &mut TraversalState, tg: &TypeGraph, cg: &CallGraph) -> Result
     }
 }
 
+/// Execute a single traversal step programmatically (no stdin).
+/// The caller is responsible for checking `state.queue.is_empty()` after
+/// `Complete` or `Discard` actions to advance the queue.
+pub fn step(state: &mut TraversalState, action: &Action, tg: &TypeGraph, cg: &CallGraph) {
+    match action {
+        Action::Down(idx) => state.navigate_down(*idx, tg, cg),
+        Action::DownDispatch(idx, sub) => state.navigate_down_dispatch(*idx, *sub, tg, cg),
+        Action::Up(idx) => state.navigate_up(*idx, tg, cg),
+        Action::UpDispatch(idx, sub) => state.navigate_up_dispatch(*idx, *sub, tg, cg),
+        Action::Complete(judgment) => state.complete(*judgment, String::new()),
+        Action::Discard => state.discard(),
+        Action::History => {}
+        Action::Quit => {}
+        Action::Unknown => {}
+    }
+}
+
 #[derive(Debug)]
-enum Action {
+pub enum Action {
     Down(usize),
     DownDispatch(usize, usize),
     Up(usize),
@@ -92,7 +111,7 @@ enum Action {
     Unknown,
 }
 
-fn parse_action(input: &str) -> Action {
+pub fn parse_action(input: &str) -> Action {
     let input = input.trim().to_lowercase();
 
     if input == "q" || input == "quit" { return Action::Quit; }

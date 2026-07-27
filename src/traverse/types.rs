@@ -1,7 +1,9 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::resolve::types::{ClassInfo, TypeGraph};
 use crate::analysis::callgraph::{CallGraph, CallSite};
+use crate::analysis::pdg_context::PdgContext;
 
 #[derive(Debug, Clone)]
 pub struct NodeRef {
@@ -15,6 +17,7 @@ pub enum EdgeKind {
     Interface { interface: String, implementations: Vec<(String, f64)> },
     Virtual { base_class: String, overrides: Vec<(String, f64)> },
     External,
+    Delegate { handlers: Vec<String> },
 }
 
 #[derive(Debug, Clone)]
@@ -24,6 +27,8 @@ pub struct NavEntry {
     pub via: String,
     pub target: NodeRef,
     pub kind: EdgeKind,
+    pub line: Option<usize>,
+    pub context: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -40,7 +45,7 @@ pub struct HistoryEntry {
     pub insight: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct TraversalState {
     pub current: NodeRef,
     pub queue: Vec<NodeRef>,
@@ -50,10 +55,12 @@ pub struct TraversalState {
     pub incident_context: Option<String>,
     pub down: Vec<NavEntry>,
     pub up: Vec<NavEntry>,
+    pub up_dispatch: Vec<NavEntry>,
+    pub pdg: Arc<PdgContext>,
 }
 
 impl TraversalState {
-    pub fn init(tg: &TypeGraph, cg: &CallGraph, class: &str, context: Option<String>) -> Result<Self, String> {
+    pub fn init(tg: &TypeGraph, cg: &CallGraph, class: &str, context: Option<String>, project_dir: Option<&str>) -> Result<Self, String> {
         let lower = class.to_lowercase();
         let class_name = tg.classes.keys()
             .find(|k| k.eq_ignore_ascii_case(class))
@@ -68,7 +75,10 @@ impl TraversalState {
                     .filter(|k| k.to_lowercase().contains(&lower))
                     .collect();
                 if matches.is_empty() {
-                    format!("Class '{}' not found", class)
+                    let mut names: Vec<&str> = tg.classes.keys().map(|k| k.as_str()).collect();
+                    names.sort();
+                    names.truncate(30);
+                    format!("Class '{}' not found. Available classes (first 30):\n  {}\nUse --class <NAME> to specify.", class, names.join("\n  "))
                 } else {
                     let names: Vec<_> = matches.iter().map(|k| k.as_str()).collect();
                     format!("'{}' matches multiple classes:\n  {}\nUse an exact class name.", class, names.join("\n  "))
@@ -77,26 +87,39 @@ impl TraversalState {
         let class_info = tg.classes.get(class_name)
             .ok_or_else(|| format!("Class '{}' not found", class_name))?;
 
-        let methods: Vec<String> = class_info.methods.iter()
-            .filter(|m| {
+        let all_methods: Vec<String> = class_info.methods.iter().map(|m| m.method.clone()).collect();
+        let (filtered, kept): (Vec<_>, Vec<_>) = class_info.methods.iter()
+            .partition(|m| {
                 let n = m.method.as_str();
-                n != ".ctor" && n != class_name.as_str()
-                    && !n.starts_with("get_") && !n.starts_with("set_")
-                    && !n.starts_with("add_") && !n.starts_with("remove_")
-            })
-            .map(|m| m.method.clone())
-            .collect();
+                n == ".ctor" || n == class_name.as_str()
+                    || n.starts_with("get_") || n.starts_with("set_")
+                    || n.starts_with("add_") || n.starts_with("remove_")
+            });
+        let methods: Vec<String> = kept.iter().map(|m| m.method.clone()).collect();
 
         if methods.is_empty() {
-            return Err(format!("Class '{}' has no methods to traverse", class_name));
+            let total = all_methods.len();
+            let filtered_names: Vec<&str> = filtered.iter().map(|m| m.method.as_str()).collect();
+            if total == 0 {
+                return Err(format!("Class '{}' has no methods at all (empty or contains only fields/properties)", class_name));
+            }
+            return Err(format!(
+                "Class '{}' has no traversable methods ({} total, {} filtered: [{}])",
+                class_name, total, filtered.len(), filtered_names.join(", ")
+            ));
         }
 
         let first = &methods[0];
         let remaining: Vec<NodeRef> = methods[1..].iter().map(|m| mk_node(tg, class_name, m)).collect();
 
+        let pdg = match project_dir {
+            Some(dir) => Arc::new(PdgContext::build(std::path::Path::new(dir))),
+            None => Arc::new(PdgContext::empty()),
+        };
+
         let current = mk_node(tg, class_name, first);
-        let down = resolve_down(cg, tg, &current);
-        let up = resolve_up(cg, tg, &current);
+        let down = resolve_down(cg, tg, &pdg, &current);
+        let (up, up_dispatch) = resolve_up(cg, tg, &current);
 
         Ok(TraversalState {
             current,
@@ -107,6 +130,8 @@ impl TraversalState {
             incident_context: context,
             down,
             up,
+            up_dispatch,
+            pdg,
         })
     }
 
@@ -122,8 +147,10 @@ impl TraversalState {
             insight: String::new(),
         });
         self.current = target;
-        self.down = resolve_down(cg, tg, &self.current);
-        self.up = resolve_up(cg, tg, &self.current);
+        self.down = resolve_down(cg, tg, &self.pdg, &self.current);
+        let (up, up_dispatch) = resolve_up(cg, tg, &self.current);
+        self.up = up;
+        self.up_dispatch = up_dispatch;
     }
 
     pub fn navigate_up(&mut self, idx: usize, tg: &TypeGraph, cg: &CallGraph) {
@@ -138,8 +165,10 @@ impl TraversalState {
             insight: String::new(),
         });
         self.current = target;
-        self.down = resolve_down(cg, tg, &self.current);
-        self.up = resolve_up(cg, tg, &self.current);
+        self.down = resolve_down(cg, tg, &self.pdg, &self.current);
+        let (up, up_dispatch) = resolve_up(cg, tg, &self.current);
+        self.up = up;
+        self.up_dispatch = up_dispatch;
     }
 
     pub fn navigate_down_dispatch(&mut self, idx: usize, sub: usize, tg: &TypeGraph, cg: &CallGraph) {
@@ -147,23 +176,33 @@ impl TraversalState {
             Some(e) => e.clone(),
             None => return,
         };
-        let impls = match &entry.kind {
-            EdgeKind::Interface { implementations, .. } => implementations,
+        let target = match &entry.kind {
+            EdgeKind::Interface { implementations, .. } => {
+                let impl_class = match implementations.get(sub) {
+                    Some((name, _)) => name.clone(),
+                    None => return,
+                };
+                NodeRef { class: impl_class, method: entry.callee.clone() }
+            }
+            EdgeKind::Delegate { handlers } => {
+                let method = match handlers.get(sub) {
+                    Some(m) => m.clone(),
+                    None => return,
+                };
+                NodeRef { class: self.current.class.clone(), method }
+            }
             _ => return,
         };
-        let impl_class = match impls.get(sub) {
-            Some((name, _)) => name.clone(),
-            None => return,
-        };
-        let target = NodeRef { class: impl_class, method: entry.callee.clone() };
         self.history.push(HistoryEntry {
             node: self.current.clone(),
             action: format!("↓{}{}", idx, (b'a' + sub as u8) as char),
             insight: String::new(),
         });
         self.current = target;
-        self.down = resolve_down(cg, tg, &self.current);
-        self.up = resolve_up(cg, tg, &self.current);
+        self.down = resolve_down(cg, tg, &self.pdg, &self.current);
+        let (up, up_dispatch) = resolve_up(cg, tg, &self.current);
+        self.up = up;
+        self.up_dispatch = up_dispatch;
     }
 
     pub fn navigate_up_dispatch(&mut self, idx: usize, sub: usize, tg: &TypeGraph, cg: &CallGraph) {
@@ -171,23 +210,30 @@ impl TraversalState {
             Some(e) => e.clone(),
             None => return,
         };
-        let impls = match &entry.kind {
-            EdgeKind::Interface { implementations, .. } => implementations,
+        let target = match &entry.kind {
+            EdgeKind::Interface { implementations, .. } => {
+                let impl_class = match implementations.get(sub) {
+                    Some((name, _)) => name.clone(),
+                    None => return,
+                };
+                NodeRef { class: impl_class, method: entry.callee.clone() }
+            }
+            EdgeKind::Delegate { handlers: _ } => {
+                // Up delegates navigate to the caller's class where the delegation happened
+                NodeRef { class: entry.target.class.clone(), method: entry.target.method.clone() }
+            }
             _ => return,
         };
-        let impl_class = match impls.get(sub) {
-            Some((name, _)) => name.clone(),
-            None => return,
-        };
-        let target = NodeRef { class: impl_class, method: entry.callee.clone() };
         self.history.push(HistoryEntry {
             node: self.current.clone(),
             action: format!("↑{}{}", idx, (b'a' + sub as u8) as char),
             insight: String::new(),
         });
         self.current = target;
-        self.down = resolve_down(cg, tg, &self.current);
-        self.up = resolve_up(cg, tg, &self.current);
+        self.down = resolve_down(cg, tg, &self.pdg, &self.current);
+        let (up, up_dispatch) = resolve_up(cg, tg, &self.current);
+        self.up = up;
+        self.up_dispatch = up_dispatch;
     }
 
     pub fn complete(&mut self, judgment: Judgment, evidence: String) {
@@ -212,8 +258,10 @@ impl TraversalState {
         if self.queue.is_empty() { return false; }
         let next = self.queue.remove(0);
         self.current = next;
-        self.down = resolve_down(cg, tg, &self.current);
-        self.up = resolve_up(cg, tg, &self.current);
+        self.down = resolve_down(cg, tg, &self.pdg, &self.current);
+        let (up, up_dispatch) = resolve_up(cg, tg, &self.current);
+        self.up = up;
+        self.up_dispatch = up_dispatch;
         true
     }
 }
@@ -225,7 +273,7 @@ fn mk_node(_tg: &TypeGraph, class: &str, method: &str) -> NodeRef {
     }
 }
 
-fn resolve_down(cg: &CallGraph, tg: &TypeGraph, node: &NodeRef) -> Vec<NavEntry> {
+pub fn resolve_down(cg: &CallGraph, tg: &TypeGraph, pdg: &PdgContext, node: &NodeRef) -> Vec<NavEntry> {
     // Interface node — show implementor methods
     if is_interface(tg, &node.class) {
         let mut result = Vec::new();
@@ -240,6 +288,8 @@ fn resolve_down(cg: &CallGraph, tg: &TypeGraph, node: &NodeRef) -> Vec<NavEntry>
                     via: impl_info.name.clone(),
                     target: NodeRef { class: impl_info.name.clone(), method: node.method.clone() },
                     kind: EdgeKind::Direct,
+                    line: None,
+                    context: None,
                 });
             }
         }
@@ -270,8 +320,16 @@ fn resolve_down(cg: &CallGraph, tg: &TypeGraph, node: &NodeRef) -> Vec<NavEntry>
                 .map(|c| c.methods.iter().any(|m| m.method == found.method))
                 .unwrap_or(false);
             if !method_exists {
-                // Unresolvable external call
-                (NodeRef { class: first.target_expr.clone(), method: callee.clone() }, EdgeKind::External)
+                // Unresolvable external call — check for delegate handlers
+                let delegate_handlers: Vec<String> = sites.iter()
+                    .flat_map(|s| s.delegates.iter().cloned())
+                    .collect();
+                let kind = if delegate_handlers.is_empty() {
+                    EdgeKind::External
+                } else {
+                    EdgeKind::Delegate { handlers: delegate_handlers }
+                };
+                (NodeRef { class: first.target_expr.clone(), method: callee.clone() }, kind)
             } else {
                 (found, classify_edge(tg, &callee, &first.target_expr))
             }
@@ -279,70 +337,98 @@ fn resolve_down(cg: &CallGraph, tg: &TypeGraph, node: &NodeRef) -> Vec<NavEntry>
             let kind = classify_edge(tg, &callee, &first.target_expr);
             (mk_node(tg, &callee_class, &callee), kind)
         };
-        result.push(NavEntry { idx, callee, via, target, kind });
+        let line = first.line;
+        let context = get_context(tg, pdg, &first.target_expr, line, &callee, &target, &sites);
+        result.push(NavEntry { idx, callee, via, target, kind, line: Some(line), context });
     }
 
     result
 }
 
-fn resolve_up(cg: &CallGraph, tg: &TypeGraph, node: &NodeRef) -> Vec<NavEntry> {
+fn get_context(tg: &TypeGraph, pdg: &PdgContext, _target_expr: &str, line: usize, _callee: &str, target: &NodeRef, _sites: &[&CallSite]) -> Option<String> {
+    let file = PdgContext::get_method_file(&target.class, &target.method, tg)?;
+    let ctrl = pdg.get_control_context(&file, line);
+    let data = pdg.get_data_context(&file, line);
+    let mut parts = Vec::new();
+    if let Some(ref c) = ctrl {
+        parts.push(format!("ctrl: [{}]", c.join(", ")));
+    }
+    if let Some(ref d) = data {
+        parts.push(format!("data: [{}]", d.join(", ")));
+    }
+    if parts.is_empty() { None } else { Some(parts.join("; ")) }
+}
+
+pub fn resolve_up(cg: &CallGraph, tg: &TypeGraph, node: &NodeRef) -> (Vec<NavEntry>, Vec<NavEntry>) {
+    // Always compute dispatch sources (type-flow based dispatch chain)
+    let dispatch = find_dispatch_sources(tg, cg, node);
+
     // Interface node — show callers that call the interface method
     if is_interface(tg, &node.class) {
         let calls: Vec<&CallSite> = cg.calls.iter()
             .filter(|c| {
                 c.callee == node.method
-                    && (c.callee_class == node.class || c.callee_class.is_empty())
+                    && (c.callee_class == node.class
+                        || (c.callee_class.is_empty() && !c.is_self_call
+                            && c.caller_class != node.class
+                            && is_method_unique(tg, &node.method)))
             })
             .collect();
         if !calls.is_empty() {
-            return group_up_calls(calls);
+            return (group_up_calls(calls), dispatch);
         }
-        // If callers call the method through the interface name, show those too
-        let iface_calls: Vec<&CallSite> = cg.calls.iter()
-            .filter(|c| c.callee == node.method && c.callee_class == node.class)
-            .collect();
-        if !iface_calls.is_empty() {
-            return group_up_calls(iface_calls);
-        }
-        return Vec::new();
+        return (Vec::new(), dispatch);
     }
 
+    // Exact match: callee_class resolved to our class
+    // Also include calls with empty callee_class through variables,
+    // but only if the method name is unique across all classes
+    // (avoids false positives from method name collisions)
     let calls: Vec<&CallSite> = cg.calls.iter()
         .filter(|c| {
-            c.callee == node.method
-                && (c.callee_class == node.class || c.callee_class.is_empty())
+            if c.callee != node.method { return false; }
+            if c.callee_class == node.class { return true; }
+            c.callee_class.is_empty()
+                && !c.is_self_call
+                && !tg.classes.contains_key(&c.target_expr)
+                && is_method_unique(tg, &node.method)
         })
         .collect();
 
     if !calls.is_empty() {
-        return group_up_calls(calls);
+        return (group_up_calls(calls), dispatch);
     }
+
+    // Check for delegate callers: our method passed as argument to another method
+    let delegate_calls: Vec<&CallSite> = cg.calls.iter()
+        .filter(|c| c.delegates.iter().any(|d| d == &node.method) && c.caller_method != node.method)
+        .collect();
+    let delegate_up = if delegate_calls.is_empty() {
+        Vec::new()
+    } else {
+        group_up_calls(delegate_calls)
+    };
 
     // No direct callers — check if method implements an interface method
     let matching_ifaces = find_matching_interfaces(tg, node);
 
-    // Always check for dispatch sources (type-flow based dispatch chain)
-    // even when no interface is involved
-    let dispatch = find_dispatch_sources(tg, cg, node);
-
     if matching_ifaces.is_empty() {
-        if dispatch.is_empty() {
-            return Vec::new();
-        }
-        // Only dispatch sources found
-        return dispatch;
+        return (delegate_up, dispatch);
     }
 
     // Search for callers through the interface (callee_class = interface name)
+    // Also include calls with empty callee_class — these are often calls through
+    // interface-typed variables (e.g., `IInterface x = ...; x.Method()`)
     let iface_calls: Vec<&CallSite> = cg.calls.iter()
         .filter(|c| {
             c.callee == node.method
-                && matching_ifaces.contains(&&c.callee_class)
+                && (matching_ifaces.contains(&&c.callee_class)
+                    || (c.callee_class.is_empty() && c.caller_class != node.class))
         })
         .collect();
 
     if !iface_calls.is_empty() {
-        let mut result = Vec::new();
+        let mut up = Vec::new();
         let mut idx = 0;
         let mut seen: HashMap<String, Vec<&CallSite>> = HashMap::new();
         for c in iface_calls {
@@ -358,59 +444,46 @@ fn resolve_up(cg: &CallGraph, tg: &TypeGraph, node: &NodeRef) -> Vec<NavEntry> {
             idx += 1;
             let first = sites[0];
             let target = NodeRef { class: caller_class.clone(), method: first.caller_method.clone() };
-            result.push(NavEntry {
+            up.push(NavEntry {
                 idx,
                 callee: first.callee.clone(),
                 via: first.caller_method.clone(),
                 target,
                 kind: EdgeKind::Interface { interface: iface_name.clone(), implementations: impls.clone() },
+                line: None,
+                context: None,
             });
         }
-        let base = result.len();
-        for (i, mut entry) in dispatch.into_iter().enumerate() {
+        let base = up.len();
+        for (i, mut entry) in delegate_up.into_iter().enumerate() {
             entry.idx = base + i + 1;
-            result.push(entry);
+            up.push(entry);
         }
-        return result;
+        return (up, dispatch);
     }
 
-    // No interface dispatch callers either — search for any call to this method
-    // from outside the class (potential dispatch through interface-typed variables)
-    let loose_calls: Vec<&CallSite> = cg.calls.iter()
-        .filter(|c| c.callee == node.method && c.caller_class != node.class)
-        .collect();
-
-    if !loose_calls.is_empty() {
-        let mut result = group_up_calls(loose_calls);
-        let base = result.len();
-        for (i, mut entry) in dispatch.into_iter().enumerate() {
-            entry.idx = base + i + 1;
-            result.push(entry);
-        }
-        return result;
-    }
-
-    // No callers anywhere — create a synthetic entry pointing to the interface
+    // No callers through interface — create a synthetic entry pointing to the interface
     let iface_name = matching_ifaces[0].clone();
     let impls: Vec<(String, f64)> = find_implementors(tg, &iface_name)
         .iter().filter(|c| c.name != node.class)
         .map(|c| (c.name.clone(), 0.95)).collect();
-    let mut result = vec![NavEntry {
+    let up = vec![NavEntry {
         idx: 1,
         callee: node.method.clone(),
         via: iface_name.clone(),
         target: NodeRef { class: iface_name.clone(), method: node.method.clone() },
         kind: EdgeKind::Interface { interface: iface_name, implementations: impls },
+        line: None,
+        context: None,
     }];
-
-    // Add dispatch sources — methods with matching parameter types calling external
+    let mut result = up;
     let base = result.len();
-    for (i, mut entry) in dispatch.into_iter().enumerate() {
+    for (i, mut entry) in delegate_up.into_iter().enumerate() {
         entry.idx = base + i + 1;
         result.push(entry);
     }
 
-    result
+    (result, dispatch)
 }
 
 fn find_matching_interfaces<'a>(tg: &'a TypeGraph, node: &NodeRef) -> Vec<&'a String> {
@@ -425,6 +498,15 @@ fn find_matching_interfaces<'a>(tg: &'a TypeGraph, node: &NodeRef) -> Vec<&'a St
             class_info.methods.iter().any(|m| m.method == node.method)
         })
         .collect()
+}
+
+/// Returns true if only ONE class in the type graph has a method with this name.
+/// Used to disambiguate calls with empty callee_class.
+fn is_method_unique(tg: &TypeGraph, method: &str) -> bool {
+    let count = tg.classes.values()
+        .filter(|ci| ci.methods.iter().any(|m| m.method == method))
+        .count();
+    count == 1
 }
 
 fn group_up_calls(calls: Vec<&CallSite>) -> Vec<NavEntry> {
@@ -443,7 +525,7 @@ fn group_up_calls(calls: Vec<&CallSite>) -> Vec<NavEntry> {
         let first = sites[0];
         let via = first.caller_method.clone();
         let target = NodeRef { class: caller_class.clone(), method: first.caller_method.clone() };
-        result.push(NavEntry { idx, callee: via, via: String::new(), target, kind: EdgeKind::Direct });
+        result.push(NavEntry { idx, callee: via, via: String::new(), target, kind: EdgeKind::Direct, line: None, context: None });
     }
 
     result
@@ -556,6 +638,8 @@ fn find_dispatch_sources(tg: &TypeGraph, cg: &CallGraph, node: &NodeRef) -> Vec<
                     via: String::new(),
                     target: NodeRef { class: class_name.clone(), method: md.method.clone() },
                     kind: EdgeKind::Direct,
+                    line: None,
+                    context: None,
                 });
             }
         }
@@ -807,8 +891,9 @@ mod tests {
     fn test_resolve_down_interface_node() {
         let src = "interface I { void M(); } class C : I { public void M() {} void Caller() { M(); } }";
         let (tg, cg) = build_tg_and_cg(src);
+        let pdg = PdgContext::empty();
         let node = NodeRef { class: "I".into(), method: "M".into() };
-        let down = resolve_down(&cg, &tg, &node);
+        let down = resolve_down(&cg, &tg, &pdg, &node);
         assert_eq!(down.len(), 1);
         assert_eq!(down[0].callee, "M");
         assert_eq!(down[0].target.class, "C");
@@ -817,8 +902,9 @@ mod tests {
     #[test]
     fn test_resolve_down_interface_node_no_impl() {
         let (tg, cg) = build_tg_and_cg("interface I { void M(); }");
+        let pdg = PdgContext::empty();
         let node = NodeRef { class: "I".into(), method: "M".into() };
-        let down = resolve_down(&cg, &tg, &node);
+        let down = resolve_down(&cg, &tg, &pdg, &node);
         assert!(down.is_empty());
     }
 
@@ -826,8 +912,9 @@ mod tests {
     fn test_resolve_down_direct_call() {
         let src = "class A { public void M() {} } class B { void Caller() { var a = new A(); a.M(); } }";
         let (tg, cg) = build_tg_and_cg(src);
+        let pdg = PdgContext::empty();
         let node = NodeRef { class: "B".into(), method: "Caller".into() };
-        let down = resolve_down(&cg, &tg, &node);
+        let down = resolve_down(&cg, &tg, &pdg, &node);
         assert!(down.iter().any(|e| e.callee == "M" && e.target.class == "A"));
     }
 
@@ -836,17 +923,49 @@ mod tests {
         // A method that calls something unresolved (no class has that method)
         let src = "class B { void Caller() { someObj.PublishAsync(); } }";
         let (tg, cg) = build_tg_and_cg(src);
+        let pdg = PdgContext::empty();
         let node = NodeRef { class: "B".into(), method: "Caller".into() };
-        let down = resolve_down(&cg, &tg, &node);
+        let down = resolve_down(&cg, &tg, &pdg, &node);
         assert!(down.iter().any(|e| matches!(e.kind, EdgeKind::External)));
+    }
+
+    #[test]
+    fn test_resolve_down_delegate_call() {
+        let src = "class Service { void Setup() { MapPost(\"/path\", CreateItem); } void CreateItem() {} }";
+        let (tg, cg) = build_tg_and_cg(src);
+        let pdg = PdgContext::empty();
+        let node = NodeRef { class: "Service".into(), method: "Setup".into() };
+        let down = resolve_down(&cg, &tg, &pdg, &node);
+        let delegate_entry = down.iter().find(|e| matches!(e.kind, EdgeKind::Delegate { .. }));
+        assert!(delegate_entry.is_some(), "expected a Delegate entry; down: {:?}", down);
+        if let Some(entry) = delegate_entry {
+            if let EdgeKind::Delegate { handlers } = &entry.kind {
+                assert!(handlers.contains(&"CreateItem".to_string()));
+            }
+        }
+    }
+
+    #[test]
+    fn test_resolve_down_delegate_no_handlers() {
+        let src = "class Service { void Setup() { MapPost(\"/path\", UnknownThing); } void CreateItem() {} }";
+        let (tg, cg) = build_tg_and_cg(src);
+        let pdg = PdgContext::empty();
+        let node = NodeRef { class: "Service".into(), method: "Setup".into() };
+        let down = resolve_down(&cg, &tg, &pdg, &node);
+        // UnknownThing is not a method of Service → external, not delegate
+        let has_ext = down.iter().any(|e| matches!(e.kind, EdgeKind::External));
+        let has_del = down.iter().any(|e| matches!(e.kind, EdgeKind::Delegate { .. }));
+        assert!(has_ext, "unknown arg should fall to external");
+        assert!(!has_del, "should not be delegate when arg is unknown method");
     }
 
     #[test]
     fn test_resolve_down_empty() {
         let src = "class A { void M() {} }";
         let (tg, cg) = build_tg_and_cg(src);
+        let pdg = PdgContext::empty();
         let node = NodeRef { class: "A".into(), method: "M".into() };
-        let down = resolve_down(&cg, &tg, &node);
+        let down = resolve_down(&cg, &tg, &pdg, &node);
         assert!(down.is_empty());
     }
 
@@ -857,7 +976,7 @@ mod tests {
         let src = "class A { public void M() {} } class B { void Caller() { var a = new A(); a.M(); } }";
         let (tg, cg) = build_tg_and_cg(src);
         let node = NodeRef { class: "A".into(), method: "M".into() };
-        let up = resolve_up(&cg, &tg, &node);
+        let (up, _dispatch) = resolve_up(&cg, &tg, &node);
         assert_eq!(up.len(), 1);
         assert_eq!(up[0].target.class, "B");
         assert_eq!(up[0].target.method, "Caller");
@@ -871,7 +990,7 @@ class Handler : IEventHandler { public void Handle(string e) {} }
 class Dispatcher { void Dispatch() { IEventHandler h = null; h.Handle(\"x\"); } }";
         let (tg, cg) = build_tg_and_cg(src);
         let node = NodeRef { class: "Handler".into(), method: "Handle".into() };
-        let up = resolve_up(&cg, &tg, &node);
+        let (up, _dispatch) = resolve_up(&cg, &tg, &node);
         // Handler.Handle IS called (via h.Handle), so direct caller is found
         // In that case resolve_up returns Direct, not Interface
         assert!(up.iter().any(|e| e.target.class == "Dispatcher"));
@@ -885,7 +1004,7 @@ class Handler1 : IEventHandler { public void Handle(string e) {} }
 class Handler2 : IEventHandler { public void Handle(string e) {} }";
         let (tg, cg) = build_tg_and_cg(src);
         let node = NodeRef { class: "Handler1".into(), method: "Handle".into() };
-        let up = resolve_up(&cg, &tg, &node);
+        let (up, _dispatch) = resolve_up(&cg, &tg, &node);
         assert!(!up.is_empty(), "should have synthetic interface entry");
         let has_iface = up.iter().any(|e| matches!(e.kind, EdgeKind::Interface { .. }));
         assert!(has_iface);
@@ -905,7 +1024,7 @@ class Handler : IEventHandler { public void Handle(string e) {} }
 class Dispatcher { void Dispatch() { IEventHandler h = null; h.Handle(\"x\"); } }";
         let (tg, cg) = build_tg_and_cg(src);
         let node = NodeRef { class: "IEventHandler".into(), method: "Handle".into() };
-        let up = resolve_up(&cg, &tg, &node);
+        let (up, _dispatch) = resolve_up(&cg, &tg, &node);
         assert!(up.iter().any(|e| e.target.class == "Dispatcher"));
     }
 
@@ -917,10 +1036,10 @@ class OrderHandler { public void Handle(OrderIntegrationEvent evt) {} }
 class EventBusService { public void PublishThroughBus(OrderIntegrationEvent evt) { someBus.PublishAsync(evt); } }";
         let (tg, cg) = build_tg_and_cg(src);
         let node = NodeRef { class: "OrderHandler".into(), method: "Handle".into() };
-        let up = resolve_up(&cg, &tg, &node);
-        // Should include dispatch source (PublishThroughBus) since handler has no callers
-        assert!(up.iter().any(|e| e.callee == "PublishThroughBus"),
-            "dispatch source PublishThroughBus not found; up: {:?}", up);
+        let (_up, dispatch) = resolve_up(&cg, &tg, &node);
+        // Should include dispatch source (PublishThroughBus)
+        assert!(dispatch.iter().any(|e| e.callee == "PublishThroughBus"),
+            "dispatch source PublishThroughBus not found; dispatch: {:?}", dispatch);
     }
 
     #[test]
@@ -928,8 +1047,9 @@ class EventBusService { public void PublishThroughBus(OrderIntegrationEvent evt)
         let src = "class A { void M() {} }";
         let (tg, cg) = build_tg_and_cg(src);
         let node = NodeRef { class: "A".into(), method: "M".into() };
-        let up = resolve_up(&cg, &tg, &node);
+        let (up, dispatch) = resolve_up(&cg, &tg, &node);
         assert!(up.is_empty());
+        assert!(dispatch.is_empty());
     }
 
     #[test]
@@ -937,11 +1057,32 @@ class EventBusService { public void PublishThroughBus(OrderIntegrationEvent evt)
         let src = "interface I { void M(); } class C : I { public void M() {} }";
         let (tg, cg) = build_tg_and_cg(src);
         let node = NodeRef { class: "C".into(), method: "M".into() };
-        let up = resolve_up(&cg, &tg, &node);
+        let (up, _dispatch) = resolve_up(&cg, &tg, &node);
         // Should have a synthetic interface entry since no callers
         assert!(!up.is_empty());
         let has_interface = up.iter().any(|e| matches!(e.kind, EdgeKind::Interface { .. }));
         assert!(has_interface);
+    }
+
+    #[test]
+    fn test_resolve_up_delegate_caller() {
+        // CreateItem is passed as delegate argument to MapPost → resolve_up should find Setup as caller
+        let src = "class Service { void Setup() { MapPost(\"/path\", CreateItem); } void CreateItem() {} }";
+        let (tg, cg) = build_tg_and_cg(src);
+        let node = NodeRef { class: "Service".into(), method: "CreateItem".into() };
+        let (up, _dispatch) = resolve_up(&cg, &tg, &node);
+        assert!(up.iter().any(|e| e.target.method == "Setup"),
+            "expected Setup as delegate caller; up: {:?}", up);
+    }
+
+    #[test]
+    fn test_resolve_up_delegate_caller_multiple_handlers() {
+        let src = "class Service { void Setup() { MapPost(\"/a\", H1); MapPost(\"/b\", H2); } void H1() {} void H2() {} }";
+        let (tg, cg) = build_tg_and_cg(src);
+        let node = NodeRef { class: "Service".into(), method: "H1".into() };
+        let (up, _dispatch) = resolve_up(&cg, &tg, &node);
+        assert!(up.iter().any(|e| e.target.method == "Setup"),
+            "H1 should find Setup as delegate caller; up: {:?}", up);
     }
 
     // ─── find_dispatch_sources ──────────────────────────────────────
@@ -1007,7 +1148,7 @@ class Handler { public void Handle(IntegrationEvent evt) { anotherMethod(); } pr
     fn test_traversal_state_init() {
         let src = "class A { void M() {} }";
         let (tg, cg) = build_tg_and_cg(src);
-        let state = TraversalState::init(&tg, &cg, "A", None).unwrap();
+        let state = TraversalState::init(&tg, &cg, "A", None, None).unwrap();
         assert_eq!(state.current.class, "A");
         assert_eq!(state.current.method, "M");
     }
@@ -1015,7 +1156,7 @@ class Handler { public void Handle(IntegrationEvent evt) { anotherMethod(); } pr
     #[test]
     fn test_traversal_state_init_not_found() {
         let (tg, cg) = build_tg_and_cg("class A { void M() {} }");
-        let state = TraversalState::init(&tg, &cg, "NonExistent", None);
+        let state = TraversalState::init(&tg, &cg, "NonExistent", None, None);
         assert!(state.is_err());
     }
 
@@ -1023,7 +1164,7 @@ class Handler { public void Handle(IntegrationEvent evt) { anotherMethod(); } pr
     fn test_traversal_state_navigate_down() {
         let src = "class A { public void M() {} } class B { void Caller() { var a = new A(); a.M(); } }";
         let (tg, cg) = build_tg_and_cg(src);
-        let mut state = TraversalState::init(&tg, &cg, "B", None).unwrap();
+        let mut state = TraversalState::init(&tg, &cg, "B", None, None).unwrap();
         let down_len = state.down.len();
         assert!(down_len > 0);
         state.navigate_down(1, &tg, &cg);
@@ -1035,7 +1176,7 @@ class Handler { public void Handle(IntegrationEvent evt) { anotherMethod(); } pr
     fn test_traversal_state_navigate_up() {
         let src = "class A { public void M() {} } class B { void Caller() { var a = new A(); a.M(); } }";
         let (tg, cg) = build_tg_and_cg(src);
-        let mut state = TraversalState::init(&tg, &cg, "A", None).unwrap();
+        let mut state = TraversalState::init(&tg, &cg, "A", None, None).unwrap();
         state.navigate_up(1, &tg, &cg);
         assert_eq!(state.current.class, "B");
         assert_eq!(state.current.method, "Caller");
@@ -1048,7 +1189,7 @@ class Handler { public void Handle(IntegrationEvent evt) { anotherMethod(); } pr
 class C1 : I { public void M() {} }
 class C2 : I { public void M() {} }";
         let (tg, cg) = build_tg_and_cg(src);
-        let state = TraversalState::init(&tg, &cg, "C1", None).unwrap();
+        let state = TraversalState::init(&tg, &cg, "C1", None, None).unwrap();
         // Up should include synthetic interface dispatch entry
         let has_iface = state.up.iter().any(|e| matches!(e.kind, EdgeKind::Interface { .. }));
         assert!(has_iface, "up should have interface entry: {:?}", state.up);
@@ -1071,7 +1212,7 @@ class Impl2 : I { public void M() {} }
 class Caller { void call() { I x = null; x.M(); } }";
         let (tg, cg) = build_tg_and_cg(src);
         // Start from Caller — its call to x.M() generates a down entry with interface edge
-        let mut state = TraversalState::init(&tg, &cg, "Caller", None).unwrap();
+        let mut state = TraversalState::init(&tg, &cg, "Caller", None, None).unwrap();
         assert!(!state.down.is_empty(), "Caller should have down entries");
         // Find the interface edge in down entries
         let iface_entry = state.down.iter()
@@ -1096,7 +1237,7 @@ class Caller { void call() { I x = null; x.M(); } }";
 class C1 : I { public void M() {} }
 class C2 : I { public void M() {} }";
         let (tg, cg) = build_tg_and_cg(src);
-        let mut state = TraversalState::init(&tg, &cg, "C1", None).unwrap();
+        let mut state = TraversalState::init(&tg, &cg, "C1", None, None).unwrap();
         // Find index of the interface entry
         let iface_idx = state.up.iter().find(|e| matches!(e.kind, EdgeKind::Interface { .. })).unwrap().idx;
         // Navigate to sub-entry 0 (first other implementor, C2)
@@ -1106,10 +1247,55 @@ class C2 : I { public void M() {} }";
     }
 
     #[test]
+    fn test_traversal_state_navigate_down_dispatch_delegate() {
+        let src = "class Service { void Setup() { MapPost(\"/x\", CreateItem); } void CreateItem() {} void Other() {} }";
+        let (tg, cg) = build_tg_and_cg(src);
+        let mut state = TraversalState::init(&tg, &cg, "Service", None, None).unwrap();
+        // Find delegate entry in down
+        let del_entry = state.down.iter()
+            .find(|e| matches!(e.kind, EdgeKind::Delegate { .. }))
+            .expect("Setup should have a Delegate entry");
+        let del_idx = del_entry.idx;
+        // Navigate to the first delegate handler (CreateItem)
+        state.navigate_down_dispatch(del_idx, 0, &tg, &cg);
+        assert_eq!(state.current.class, "Service", "should stay in same class");
+        assert_eq!(state.current.method, "CreateItem", "should navigate to handler method");
+        // History should contain the dispatch action
+        assert!(state.history.iter().any(|h| h.action.starts_with('↓') && h.action.len() > 2));
+    }
+
+    #[test]
+    fn test_traversal_state_navigate_down_dispatch_delegate_multiple() {
+        let src = "class Service {
+            void Setup() {
+                MapPost(\"/x\", H1);
+                MapPost(\"/y\", H2);
+            }
+            void H1() {}
+            void H2() {}
+        }";
+        let (tg, cg) = build_tg_and_cg(src);
+        let mut state = TraversalState::init(&tg, &cg, "Service", None, None).unwrap();
+        // Find delegate entries
+        let del_entries: Vec<_> = state.down.iter()
+            .filter(|e| matches!(e.kind, EdgeKind::Delegate { .. }))
+            .collect();
+        // There should be one delegate entry per external call with handlers
+        // MapPost("/x", H1) and MapPost("/y", H2) each produce a Delegate entry
+        // Both have H1/H2 as handlers respectively
+        assert!(del_entries.len() >= 1, "should have at least one Delegate entry; down: {:?}", state.down);
+        // Navigate into first delegate entry's first handler
+        let first = del_entries[0];
+        state.navigate_down_dispatch(first.idx, 0, &tg, &cg);
+        assert_eq!(state.current.class, "Service");
+        assert!(state.current.method == "H1" || state.current.method == "H2");
+    }
+
+    #[test]
     fn test_traversal_state_history() {
         let src = "class A { public void M() {} } class B { void Caller() { var a = new A(); a.M(); } }";
         let (tg, cg) = build_tg_and_cg(src);
-        let mut state = TraversalState::init(&tg, &cg, "B", None).unwrap();
+        let mut state = TraversalState::init(&tg, &cg, "B", None, None).unwrap();
         assert_eq!(state.history.len(), 0);
         state.navigate_down(1, &tg, &cg);
         assert_eq!(state.history.len(), 1);
@@ -1123,7 +1309,7 @@ class C2 : I { public void M() {} }";
     fn test_traversal_state_complete() {
         let src = "class A { void M() {} }";
         let (tg, cg) = build_tg_and_cg(src);
-        let mut state = TraversalState::init(&tg, &cg, "A", None).unwrap();
+        let mut state = TraversalState::init(&tg, &cg, "A", None, None).unwrap();
         state.complete(Judgment::Primary, "found the bug".into());
         assert_eq!(state.judgments.get("A"), Some(&Judgment::Primary));
         assert_eq!(state.evidence.get("A"), Some(&"found the bug".into()));
@@ -1133,7 +1319,7 @@ class C2 : I { public void M() {} }";
     fn test_traversal_state_next_in_queue() {
         let src = "class A { void M1() {} void M2() {} }";
         let (tg, cg) = build_tg_and_cg(src);
-        let mut state = TraversalState::init(&tg, &cg, "A", None).unwrap();
+        let mut state = TraversalState::init(&tg, &cg, "A", None, None).unwrap();
         assert_eq!(state.current.method, "M1");
         assert!(state.next_in_queue(&tg, &cg));
         assert_eq!(state.current.method, "M2");
@@ -1144,7 +1330,7 @@ class C2 : I { public void M() {} }";
     fn test_traversal_state_discard() {
         let src = "class A { void M1() {} void M2() {} }";
         let (tg, cg) = build_tg_and_cg(src);
-        let mut state = TraversalState::init(&tg, &cg, "A", None).unwrap();
+        let mut state = TraversalState::init(&tg, &cg, "A", None, None).unwrap();
         assert_eq!(state.history.len(), 0);
         state.discard();
         assert_eq!(state.history.len(), 1);
@@ -1155,7 +1341,7 @@ class C2 : I { public void M() {} }";
     fn test_traversal_state_init_case_insensitive() {
         let src = "class MyClass { void M() {} }";
         let (tg, cg) = build_tg_and_cg(src);
-        let state = TraversalState::init(&tg, &cg, "myclass", None).unwrap();
+        let state = TraversalState::init(&tg, &cg, "myclass", None, None).unwrap();
         assert_eq!(state.current.class, "MyClass");
     }
 
@@ -1163,7 +1349,7 @@ class C2 : I { public void M() {} }";
     fn test_traversal_state_init_substring_match() {
         let src = "class UniqueClassName { void M() {} } class NotThisOne { void N() {} }";
         let (tg, cg) = build_tg_and_cg(src);
-        let state = TraversalState::init(&tg, &cg, "Unique", None).unwrap();
+        let state = TraversalState::init(&tg, &cg, "Unique", None, None).unwrap();
         assert_eq!(state.current.class, "UniqueClassName");
     }
 
@@ -1171,7 +1357,7 @@ class C2 : I { public void M() {} }";
     fn test_traversal_state_init_ambiguous() {
         let src = "class Foo1 { void M() {} } class Foo2 { void N() {} }";
         let (tg, cg) = build_tg_and_cg(src);
-        let state = TraversalState::init(&tg, &cg, "Foo", None);
+        let state = TraversalState::init(&tg, &cg, "Foo", None, None);
         assert!(state.is_err());
     }
 
@@ -1179,7 +1365,7 @@ class C2 : I { public void M() {} }";
     fn test_traversal_state_init_filters_get_set() {
         let src = "class A { int get_X() { return 0; } int set_X(int v) {} void M() {} }";
         let (tg, cg) = build_tg_and_cg(src);
-        let state = TraversalState::init(&tg, &cg, "A", None).unwrap();
+        let state = TraversalState::init(&tg, &cg, "A", None, None).unwrap();
         assert_eq!(state.current.method, "M");
     }
 
@@ -1206,5 +1392,15 @@ class C2 : I { public void M() {} }";
     fn test_edge_kind_external() {
         let kind = EdgeKind::External;
         assert!(matches!(kind, EdgeKind::External));
+    }
+
+    #[test]
+    fn test_edge_kind_delegate() {
+        let kind = EdgeKind::Delegate { handlers: vec!["CreateItem".into(), "DeleteItem".into()] };
+        if let EdgeKind::Delegate { handlers } = &kind {
+            assert_eq!(handlers.len(), 2);
+            assert_eq!(handlers[0], "CreateItem");
+            assert_eq!(handlers[1], "DeleteItem");
+        }
     }
 }

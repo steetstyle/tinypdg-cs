@@ -101,6 +101,9 @@ pub fn print_nav(entries: &[NavEntry], label: &str) {
         } else {
             println!("  {} [{}] {} via {} {}", marker, entry.idx, entry.callee, entry.via, entry.target.class);
         }
+        if let Some(ref ctx) = entry.context {
+            println!("       context: {}", ctx);
+        }
 
         match &entry.kind {
             EdgeKind::Interface { interface, implementations } => {
@@ -123,6 +126,13 @@ pub fn print_nav(entries: &[NavEntry], label: &str) {
                 println!("       (external library)");
             }
             EdgeKind::Direct => {}
+            EdgeKind::Delegate { handlers } => {
+                println!("       ══ DELEGATE HANDLERS ══");
+                for (i, handler) in handlers.iter().enumerate() {
+                    let letter = (b'a' + i as u8) as char;
+                    println!("       ├─ [{}{}] {} ({})", entry.idx, letter, handler, entry.target.class);
+                }
+            }
         }
         i += 1;
     }
@@ -161,6 +171,6 @@ pub fn print_prompt() {
 
 impl EdgeKind {
     fn is_dispatch(&self) -> bool {
-        matches!(self, EdgeKind::Interface { .. } | EdgeKind::Virtual { .. })
+        matches!(self, EdgeKind::Interface { .. } | EdgeKind::Virtual { .. } | EdgeKind::Delegate { .. })
     }
 }

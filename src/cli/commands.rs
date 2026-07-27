@@ -324,15 +324,15 @@ pub fn handle_detect(path: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn handle_traverse(path: &str, class: &str, context: Option<&str>) -> Result<()> {
-    let path = Path::new(path);
+pub fn handle_traverse(path_str: &str, class: &str, context: Option<&str>) -> Result<()> {
+    let path = Path::new(path_str);
     if !path.exists() {
         anyhow::bail!("Path does not exist: {}", path.display());
     }
 
     let (tg, cg) = load_project(path)?;
 
-    let mut state = match crate::traverse::types::TraversalState::init(&tg, &cg, class, context.map(|s| s.to_string())) {
+    let mut state = match crate::traverse::types::TraversalState::init(&tg, &cg, class, context.map(|s| s.to_string()), Some(path_str)) {
         Ok(s) => s,
         Err(e) => anyhow::bail!("{}", e),
     };
@@ -653,10 +653,21 @@ fn load_project(path: &Path) -> Result<(TypeGraph, CallGraph)> {
         let mut local_tg = st.type_graph;
         local_tg.annotate_method_files(file);
         for (name, info) in local_tg.classes {
-            type_graph.classes.entry(name).or_insert(info);
+            if let Some(existing) = type_graph.classes.get_mut(&name) {
+                existing.methods.extend(info.methods);
+                existing.fields.extend(info.fields);
+                if info.base_class.is_some() { existing.base_class = info.base_class; }
+                existing.interfaces.extend(info.interfaces);
+            } else {
+                type_graph.classes.insert(name, info);
+            }
         }
         for (name, info) in local_tg.interfaces {
-            type_graph.interfaces.entry(name).or_insert(info);
+            if let Some(existing) = type_graph.interfaces.get_mut(&name) {
+                existing.methods.extend(info.methods);
+            } else {
+                type_graph.interfaces.insert(name, info);
+            }
         }
         parsed.push((file.clone(), tree, source));
     }
