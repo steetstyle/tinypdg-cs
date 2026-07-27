@@ -145,6 +145,11 @@ impl TraversalState {
             println!("  ⚠ External call — cannot navigate further (leaf node)");
             return;
         }
+        // Self-call or same target — skip to avoid infinite loop
+        if entry.target.class == self.current.class && entry.target.method == self.current.method {
+            println!("  ⚠ Self-call — already at {}.{}", self.current.class, self.current.method);
+            return;
+        }
         self.history.push(HistoryEntry {
             node: self.current.clone(),
             action: format!("↓{}", idx),
