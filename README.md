@@ -6,7 +6,7 @@ Made for LLM-driven root cause analysis on C# microservices. The idea is to buil
 
 ## What it does
 
-Ten CLI commands:
+Twelve CLI commands:
 
 ```
 parse      -- AST + type graph as JSON
@@ -17,6 +17,8 @@ resolve    -- call resolution (DI, reflection, CHA, virtual dispatch)
 callgraph  -- focused call graph for a class, with dispatch tracing
 detect     -- design pattern detection (GoF 22 + .NET idioms)
 route      -- HTTP route extraction (Controllers + Minimal APIs)
+impact     -- impact analysis: DOT graph of change ripple through callers
+diffimpact -- compare two versions: show changes + affected places as DOT
 serve      -- HTTP server for tool integration
 ```
 
@@ -63,8 +65,8 @@ src/
   resolve/        type graph, call targets, symbol table, DI/factory/reflection/CHA
   detect/         GoF 22 + .NET pattern detection
   graph/          petgraph wrapper, DOT export
-  cli/            command handlers
-  analysis/       focused call graph analysis
+  cli/            command handlers (thin dispatch, no business logic)
+  analysis/       call graph, impact analysis, diff-impact analysis
   route/          HTTP route extraction (Controller + Minimal API)
   main.rs         clap entry point
 ```
@@ -289,6 +291,60 @@ $ tinypdg-cs route patterns/ --json | jq '.routes[] | {http_method, path, handle
 ```
 
 Only classes named `*Controller` or inheriting `ControllerBase` are scanned for controller routes. Minimal API routes (`app.MapGet`, `MapPost`, `MapPut`, `MapDelete`, `MapPatch`) are extracted from `invocation_expression` nodes with handler name resolution via parent class context.
+
+### Impact analysis
+
+Show a DOT graph of all places affected if you change a method — traces the transitive caller chain:
+
+```
+$ tinypdg-cs impact src/Catalog.API --class CatalogItem --method RemoveStock
+digraph Impact {
+  rankdir=BT;
+  node [shape=box style=rounded];
+
+  label="Impact analysis for CatalogItem.RemoveStock\nTotal transitive callers: 3";
+  ...
+
+  "CatalogItem.RemoveStock" [label="CatalogItem.RemoveStock (affects 3 sites)" ...];
+  "OrderHandler.Handle" [label="OrderHandler.Handle (affects 1 sites)" ...];
+  ...
+}
+```
+
+The target method is highlighted in red. Each node shows the total number of transitive call sites (direct + indirect). Useful for understanding change risk before refactoring.
+
+### Diff-impact analysis
+
+Compare two versions of the same project and visualize what changed between them plus the places affected in v2:
+
+```
+$ tinypdg-cs diffimpact src/Catalog.API.old/ src/Catalog.API.new/ --class CatalogItem --method RemoveStock
+digraph DiffImpact {
+  rankdir=BT;
+  ...
+  "OrderHandler.Handle" [label="OrderHandler.Handle (affects 1 sites)" ...];
+  "CatalogItem.RemoveStock" [label="CatalogItem.RemoveStock (affects 3 sites)" ... fillcolor=lightcoral penwidth=2];
+  "NewMethod.GetData" [label="NewMethod.GetData (affects 0 sites)" ... fillcolor=lightyellow penwidth=2];
+  ...
+}
+```
+
+Changed methods are highlighted:
+- **Red** = target method (focus of the impact graph)
+- **Yellow** = other changed methods (added, removed, or caller sets changed)
+- **Blue** = unchanged intermediate callers
+
+The DOT output shows both the call chain (edges) and the change set (node colors), so you can see exactly which callers are affected by which changes.
+
+### Graph library API
+
+The `graph::dot` module is exported as `tiny_pdg_cs::dot` and provides three functions:
+
+- `pdg_to_dot(pdg, title)` — full `digraph PDG { ... }` wrapper
+- `pdg_nodes_edges_to_dot(pdg, indent)` — nodes and edges only (no wrapper), with optional indent prefix
+- `pdg_write_nodes_edges(pdg, dot, indent)` — same but appends to an existing `String`
+
+Use `pdg_nodes_edges_to_dot` when embedding PDG content inside a larger DOT graph (e.g., a `subgraph cluster`).
 
 ### Parse
 

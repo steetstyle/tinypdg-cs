@@ -83,6 +83,26 @@ enum Commands {
         #[arg(long, help = "Incident context description")]
         context: Option<String>,
     },
+    /// Impact analysis: shows a DOT graph of all places affected by changing a method
+    Impact {
+        #[arg(help = "Path to .cs file or project directory")]
+        path: String,
+        #[arg(long, help = "Target class name")]
+        class: String,
+        #[arg(long, help = "Target method name")]
+        method: String,
+    },
+    /// Diff-impact: compare two versions of the same project and show changes + affected places
+    Diffimpact {
+        #[arg(help = "Path to version 1 (old)")]
+        v1: String,
+        #[arg(help = "Path to version 2 (new)")]
+        v2: String,
+        #[arg(long, help = "Target class name for impact graph")]
+        class: String,
+        #[arg(long, help = "Target method name for impact graph")]
+        method: String,
+    },
 }
 
 fn main() {
@@ -122,6 +142,12 @@ fn main() {
         }
         Commands::Traverse { path, class, context } => {
             tiny_pdg_cs::cli::commands::handle_traverse(&path, &class, context.as_deref())
+        }
+        Commands::Impact { path, class, method } => {
+            tiny_pdg_cs::cli::commands::handle_impact(&path, &class, &method)
+        }
+        Commands::Diffimpact { v1, v2, class, method } => {
+            tiny_pdg_cs::cli::commands::handle_diffimpact(&v1, &v2, &class, &method)
         }
     };
 

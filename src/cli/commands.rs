@@ -667,7 +667,38 @@ fn print_call_tree(
     visited.remove(&key);
 }
 
-fn collect_cs_files(dir: &Path, files: &mut Vec<String>) {
+pub fn handle_diffimpact(v1: &str, v2: &str, class: &str, method: &str) -> Result<()> {
+    let v1_path = Path::new(v1);
+    let v2_path = Path::new(v2);
+    if !v1_path.exists() {
+        anyhow::bail!("Version 1 path does not exist: {}", v1);
+    }
+    if !v2_path.exists() {
+        anyhow::bail!("Version 2 path does not exist: {}", v2);
+    }
+
+    let result = crate::analysis::diffimpact::build_diff_impact(v1_path, v2_path, class, method)?;
+    let change_count = result.changes.len();
+    let impacted = result.impact.target_callers();
+    let title = format!("Diff-impact: {} vs {}\n{} method(s) changed, {} places affected in v2",
+        v1, v2, change_count, impacted);
+    print!("{}", crate::analysis::diffimpact::diff_impact_to_dot(&result, &title));
+    Ok(())
+}
+
+pub fn handle_impact(path: &str, class: &str, method: &str) -> Result<()> {
+    let path = Path::new(path);
+    if !path.exists() {
+        anyhow::bail!("Path does not exist: {}", path.display());
+    }
+    let (ig, _tg, _cg) = crate::analysis::impact::build_impact_graph(path, class, method)?;
+    let title = format!("Impact analysis for {}.{}\nTotal transitive callers: {}",
+        class, method, ig.target_callers());
+    print!("{}", crate::analysis::impact::impact_to_dot(&ig, &title));
+    Ok(())
+}
+
+pub fn collect_cs_files(dir: &Path, files: &mut Vec<String>) {
     if let Ok(entries) = fs::read_dir(dir) {
         for entry in entries.flatten() {
             let path = entry.path();
@@ -680,7 +711,7 @@ fn collect_cs_files(dir: &Path, files: &mut Vec<String>) {
     }
 }
 
-fn load_project(path: &Path) -> Result<(TypeGraph, CallGraph)> {
+pub fn load_project(path: &Path) -> Result<(TypeGraph, CallGraph)> {
     let mut all_cs_files = Vec::new();
     if path.is_file() {
         all_cs_files.push(path.to_string_lossy().to_string());
