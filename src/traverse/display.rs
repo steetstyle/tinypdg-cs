@@ -94,9 +94,12 @@ pub fn print_nav(entries: &[NavEntry], label: &str) {
     let mut i = 0;
     while i < entries.len() {
         let entry = &entries[i];
-        let marker = if entry.kind.is_dispatch() { "►" } else { " " };
+        let is_external = matches!(entry.kind, EdgeKind::External);
+        let marker = if entry.kind.is_dispatch() { "►" } else if is_external { " " } else { " " };
 
-        if entry.target.class.is_empty() || entry.via == entry.target.class {
+        if is_external {
+            println!("    [-] {} via {}  (external — cannot navigate)", entry.callee, entry.via);
+        } else if entry.target.class.is_empty() || entry.via == entry.target.class {
             println!("  {} [{}] {} via {}", marker, entry.idx, entry.callee, entry.via);
         } else {
             println!("  {} [{}] {} via {} {}", marker, entry.idx, entry.callee, entry.via, entry.target.class);
@@ -106,6 +109,7 @@ pub fn print_nav(entries: &[NavEntry], label: &str) {
         }
 
         match &entry.kind {
+            EdgeKind::External => {}
             EdgeKind::Interface { interface, implementations } => {
                 println!("       ══ INTERFACE: {} ══", interface);
                 for (i, (impl_class, conf)) in implementations.iter().enumerate() {
@@ -121,9 +125,6 @@ pub fn print_nav(entries: &[NavEntry], label: &str) {
                     println!("       ├─ [{}{}] {}.{}  (c={:.2})",
                         entry.idx, letter, ov_class, entry.callee, conf);
                 }
-            }
-            EdgeKind::External => {
-                println!("       (external library)");
             }
             EdgeKind::Direct => {}
             EdgeKind::Delegate { handlers } => {
