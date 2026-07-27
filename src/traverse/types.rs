@@ -504,20 +504,20 @@ pub fn resolve_up(cg: &CallGraph, tg: &TypeGraph, node: &NodeRef) -> (Vec<NavEnt
 fn build_iface_up(calls: Vec<&CallSite>, iface_name: &str, impls: &[(String, f64)], delegate_up: Vec<NavEntry>) -> Vec<NavEntry> {
     let mut up = Vec::new();
     let mut idx = 0;
-    let mut seen: HashMap<String, Vec<&CallSite>> = HashMap::new();
+    let mut seen: HashMap<(String, String), Vec<&CallSite>> = HashMap::new();
     for c in calls {
-        seen.entry(c.caller_class.clone()).or_default().push(c);
+        seen.entry((c.caller_class.clone(), c.caller_method.clone())).or_default().push(c);
     }
     let mut sorted: Vec<_> = seen.into_iter().collect();
-    sorted.sort_by(|a, b| a.0.cmp(&b.0));
-    for (caller_class, sites) in sorted {
+    sorted.sort_by(|a, b| (a.0).0.cmp(&(b.0).0).then((a.0).1.cmp(&(b.0).1)));
+    for ((caller_class, caller_method), sites) in sorted {
         idx += 1;
         let first = sites[0];
-        let target = NodeRef { class: caller_class.clone(), method: first.caller_method.clone() };
+        let target = NodeRef { class: caller_class.clone(), method: caller_method.clone() };
         up.push(NavEntry {
             idx,
             callee: first.callee.clone(),
-            via: first.caller_method.clone(),
+            via: caller_method.clone(),
             target,
             kind: EdgeKind::Interface { interface: iface_name.to_string(), implementations: impls.to_vec() },
             line: None,
