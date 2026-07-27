@@ -537,11 +537,17 @@ fn find_matching_interfaces<'a>(tg: &'a TypeGraph, node: &NodeRef) -> Vec<&'a St
         Some(c) => c,
         None => return Vec::new(),
     };
+    let method_in_class = class_info.methods.iter().any(|m| m.method == node.method);
     class_info.interfaces.iter()
-        .filter(|_iface_name| {
-            // The method is defined in this class and the class declares this interface
-            // → assume the method implements the interface method
-            class_info.methods.iter().any(|m| m.method == node.method)
+        .filter(|iface_name| {
+            // Method is explicitly defined in this class
+            if method_in_class {
+                return true;
+            }
+            // Method might be inherited — check if the interface defines it
+            tg.interfaces.get(iface_name.as_str())
+                .map(|iface| iface.methods.iter().any(|m| m.method == node.method))
+                .unwrap_or(false)
         })
         .collect()
 }
