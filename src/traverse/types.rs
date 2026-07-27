@@ -136,17 +136,21 @@ impl TraversalState {
     }
 
     pub fn navigate_down(&mut self, idx: usize, tg: &TypeGraph, cg: &CallGraph) {
-        let entry = self.down.iter().find(|e| e.idx == idx);
-        let target = match entry {
-            Some(e) => e.target.clone(),
+        let entry = match self.down.iter().find(|e| e.idx == idx) {
+            Some(e) => e.clone(),
             None => return,
         };
+        // External/lib calls are leaf nodes — skip navigation
+        if matches!(entry.kind, EdgeKind::External) {
+            println!("  ⚠ External call — cannot navigate further (leaf node)");
+            return;
+        }
         self.history.push(HistoryEntry {
             node: self.current.clone(),
             action: format!("↓{}", idx),
             insight: String::new(),
         });
-        self.current = target;
+        self.current = entry.target;
         self.down = resolve_down(cg, tg, &self.pdg, &self.current);
         let (up, up_dispatch) = resolve_up(cg, tg, &self.current);
         self.up = up;
