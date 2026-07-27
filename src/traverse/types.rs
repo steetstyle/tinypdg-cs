@@ -545,6 +545,10 @@ fn find_callee_node(tg: &TypeGraph, caller_class: String, callee: &str, target_e
         return mk_node(tg, target_expr, callee);
     }
     for (class_name, class_info) in &tg.classes {
+        // If target_expr is a field (not empty, not a known class), skip the caller class
+        if !target_expr.is_empty() && *class_name == caller_class {
+            continue;
+        }
         if class_info.methods.iter().any(|m| m.method == callee) {
             return mk_node(tg, class_name, callee);
         }
