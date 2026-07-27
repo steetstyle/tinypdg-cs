@@ -324,23 +324,46 @@ pub fn resolve_down(cg: &CallGraph, tg: &TypeGraph, pdg: &PdgContext, node: &Nod
         let first = sites[0];
         let via = if first.target_expr.is_empty() { String::new() } else { first.target_expr.clone() };
         let (target, kind) = if callee_class.is_empty() {
-            let found = find_callee_node(tg, node.class.clone(), &callee, &first.target_expr);
-            let method_exists = tg.classes.get(&found.class)
-                .map(|c| c.methods.iter().any(|m| m.method == found.method))
-                .unwrap_or(false);
-            if !method_exists {
-                // Unresolvable external call — check for delegate handlers
-                let delegate_handlers: Vec<String> = sites.iter()
-                    .flat_map(|s| s.delegates.iter().cloned())
-                    .collect();
-                let kind = if delegate_handlers.is_empty() {
-                    EdgeKind::External
-                } else {
-                    EdgeKind::Delegate { handlers: delegate_handlers }
-                };
-                (NodeRef { class: first.target_expr.clone(), method: callee.clone() }, kind)
+            if !first.target_expr.is_empty() && !tg.classes.contains_key(&first.target_expr) {
+                // target_expr is a field/property/chain/variable expression (not a known class)
+                // — first check if it's an interface method (dispatch on interface type)
+                let edge_kind = classify_edge(tg, &callee, &first.target_expr);
+                match &edge_kind {
+                    EdgeKind::Interface { interface, .. } => {
+                        (mk_node(tg, interface, &callee), edge_kind)
+                    }
+                    _ => {
+                        // Not interface — treat as external/delegate
+                        let delegate_handlers: Vec<String> = sites.iter()
+                            .flat_map(|s| s.delegates.iter().cloned())
+                            .collect();
+                        let kind = if delegate_handlers.is_empty() {
+                            EdgeKind::External
+                        } else {
+                            EdgeKind::Delegate { handlers: delegate_handlers }
+                        };
+                        (NodeRef { class: first.target_expr.clone(), method: callee.clone() }, kind)
+                    }
+                }
             } else {
-                (found, classify_edge(tg, &callee, &first.target_expr))
+                // target_expr is empty (bare call) or a known class name
+                let found = find_callee_node(tg, node.class.clone(), &callee, &first.target_expr);
+                let method_exists = tg.classes.get(&found.class)
+                    .map(|c| c.methods.iter().any(|m| m.method == found.method))
+                    .unwrap_or(false);
+                if !method_exists {
+                    let delegate_handlers: Vec<String> = sites.iter()
+                        .flat_map(|s| s.delegates.iter().cloned())
+                        .collect();
+                    let kind = if delegate_handlers.is_empty() {
+                        EdgeKind::External
+                    } else {
+                        EdgeKind::Delegate { handlers: delegate_handlers }
+                    };
+                    (NodeRef { class: first.target_expr.clone(), method: callee.clone() }, kind)
+                } else {
+                    (found, classify_edge(tg, &callee, &first.target_expr))
+                }
             }
         } else {
             let kind = classify_edge(tg, &callee, &first.target_expr);
@@ -933,7 +956,8 @@ mod tests {
         let pdg = PdgContext::empty();
         let node = NodeRef { class: "B".into(), method: "Caller".into() };
         let down = resolve_down(&cg, &tg, &pdg, &node);
-        assert!(down.iter().any(|e| e.callee == "M" && e.target.class == "A"));
+        // a.M() has target_expr="a" (not a class) → external (no type info to resolve to A)
+        assert!(down.iter().any(|e| matches!(e.kind, EdgeKind::External) && e.callee == "M"));
     }
 
     #[test]
@@ -1220,13 +1244,14 @@ class Handler { public void Handle(IntegrationEvent evt) { anotherMethod(); } pr
 
     #[test]
     fn test_traversal_state_navigate_down() {
-        let src = "class A { public void M() {} } class B { void Caller() { var a = new A(); a.M(); } }";
+        // Self-call: B.Caller calls M() (bare, no target_expr) → resolves to B.M
+        let src = "class B { void Caller() { M(); } void M() {} }";
         let (tg, cg) = build_tg_and_cg(src);
         let mut state = TraversalState::init(&tg, &cg, "B", None, None).unwrap();
         let down_len = state.down.len();
-        assert!(down_len > 0);
+        assert!(down_len > 0, "B.Caller should have down entries; down: {:?}", state.down);
         state.navigate_down(1, &tg, &cg);
-        assert_eq!(state.current.class, "A");
+        assert_eq!(state.current.class, "B");
         assert_eq!(state.current.method, "M");
     }
 
@@ -1351,7 +1376,8 @@ class C2 : I { public void M() {} }";
 
     #[test]
     fn test_traversal_state_history() {
-        let src = "class A { public void M() {} } class B { void Caller() { var a = new A(); a.M(); } }";
+        // Use self-call so navigation works (a.M() would be external)
+        let src = "class B { void Caller() { M(); } void M() {} }";
         let (tg, cg) = build_tg_and_cg(src);
         let mut state = TraversalState::init(&tg, &cg, "B", None, None).unwrap();
         assert_eq!(state.history.len(), 0);
