@@ -752,6 +752,12 @@ mod tests {
     }
 
     #[test]
+    fn test_params_type_match_subtype_rev() {
+        let (tg, _) = build_tg_and_cg("class IntegrationEvent {} class OrderIntegrationEvent : IntegrationEvent {}");
+        assert!(params_type_match(&tg, &["IntegrationEvent".into()], &["OrderIntegrationEvent".into()]));
+    }
+
+    #[test]
     fn test_params_type_match_no_match() {
         let (tg, _) = build_tg_and_cg("class A {} class B {}");
         assert!(!params_type_match(&tg, &["A".into()], &["B".into()]));
