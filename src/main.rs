@@ -67,6 +67,15 @@ enum Commands {
         #[arg(long, default_value = "8080")]
         port: u16,
     },
+    /// Interactive PRAXIS-style code traversal
+    Traverse {
+        #[arg(help = "Path to .cs file or project directory")]
+        path: String,
+        #[arg(long, help = "Class name to start traversal from")]
+        class: String,
+        #[arg(long, help = "Incident context description")]
+        context: Option<String>,
+    },
 }
 
 fn main() {
@@ -100,6 +109,9 @@ fn main() {
         Commands::Serve { port } => {
             println!("serve on {}", port);
             Ok(())
+        }
+        Commands::Traverse { path, class, context } => {
+            tiny_pdg_cs::cli::commands::handle_traverse(&path, &class, context.as_deref())
         }
     };
 

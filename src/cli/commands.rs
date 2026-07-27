@@ -324,6 +324,23 @@ pub fn handle_detect(path: &str) -> Result<()> {
     Ok(())
 }
 
+pub fn handle_traverse(path: &str, class: &str, context: Option<&str>) -> Result<()> {
+    let path = Path::new(path);
+    if !path.exists() {
+        anyhow::bail!("Path does not exist: {}", path.display());
+    }
+
+    let (tg, cg) = load_project(path)?;
+
+    let mut state = match crate::traverse::types::TraversalState::init(&tg, &cg, class, context.map(|s| s.to_string())) {
+        Some(s) => s,
+        None => anyhow::bail!("Class '{}' not found or has no methods", class),
+    };
+
+    crate::traverse::engine::run(&mut state, &tg, &cg)?;
+    Ok(())
+}
+
 pub fn handle_callgraph(path: &str, class: Option<&str>, depth: usize, only_outbound: bool, only_inbound: bool, trace: bool) -> Result<()> {
     let path = Path::new(path);
     if !path.exists() {
@@ -607,4 +624,59 @@ fn collect_cs_files(dir: &Path, files: &mut Vec<String>) {
             }
         }
     }
+}
+
+fn load_project(path: &Path) -> Result<(TypeGraph, CallGraph)> {
+    let mut all_cs_files = Vec::new();
+    if path.is_file() {
+        all_cs_files.push(path.to_string_lossy().to_string());
+    } else {
+        collect_cs_files(path, &mut all_cs_files);
+    }
+
+    let mut cg = CallGraph::new();
+    let mut type_graph = None;
+
+    for file in &all_cs_files {
+        let source = match fs::read_to_string(file) {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+        let tree = match crate::parse::parser::parse_source(&source) {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        let st = match crate::resolve::symbols::SymbolTable::from_ast(tree.root_node(), &source) {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+        let file_cg = CallGraphBuilder::build(tree.root_node(), &source, &st.type_graph);
+        for call in file_cg.calls {
+            cg.calls.push(call);
+        }
+        for (k, v) in file_cg.class_callees {
+            cg.class_callees.entry(k).or_default().extend(v);
+        }
+        for (k, v) in file_cg.class_creations {
+            cg.class_creations.entry(k).or_default().extend(v);
+        }
+        if type_graph.is_none() {
+            type_graph = Some(st.type_graph);
+        } else if let Some(ref mut tg) = type_graph {
+            for (name, info) in st.type_graph.classes {
+                tg.classes.entry(name).or_insert(info);
+            }
+            for (name, info) in st.type_graph.interfaces {
+                tg.interfaces.entry(name).or_insert(info);
+            }
+        }
+    }
+
+    let tg = type_graph.unwrap_or_default();
+    println!("Parsed {} file(s)", all_cs_files.len());
+    println!("Classes: {}, Interfaces: {}, Call sites: {}",
+        tg.classes.len(), tg.interfaces.len(), cg.calls.len());
+    println!();
+
+    Ok((tg, cg))
 }
