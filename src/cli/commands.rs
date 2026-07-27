@@ -1,10 +1,11 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 
 use anyhow::Result;
 
-use crate::analysis::callgraph::{CallGraph, CallGraphBuilder};
+use crate::analysis::callgraph::{CallGraph, CallGraphBuilder, CallSite};
+use crate::resolve::types::TypeGraph;
 use crate::cfg::builder::build_cfg;
 use crate::cfg::builder::BlockKind;
 use crate::detect::behavioral::detect_behavioral;
@@ -323,7 +324,7 @@ pub fn handle_detect(path: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn handle_callgraph(path: &str, class: Option<&str>, _depth: usize, only_outbound: bool, only_inbound: bool, trace: bool) -> Result<()> {
+pub fn handle_callgraph(path: &str, class: Option<&str>, depth: usize, only_outbound: bool, only_inbound: bool, trace: bool) -> Result<()> {
     let path = Path::new(path);
     if !path.exists() {
         anyhow::bail!("Path does not exist: {}", path.display());
@@ -404,51 +405,35 @@ pub fn handle_callgraph(path: &str, class: Option<&str>, _depth: usize, only_out
 
                 if !only_inbound {
                     println!("\n── Outbound calls (what {} calls) ──", cn);
-                    let calls_from: Vec<_> = cg.calls.iter()
-                        .filter(|c| c.caller_class == *cn)
-                        .collect();
-                    if calls_from.is_empty() {
+                    let mut class_methods: Vec<String> = tg.classes.get(cn.as_str())
+                        .map(|c| c.methods.iter().filter(|m| !m.method.starts_with("get_") && !m.method.starts_with("set_")).map(|m| m.method.clone()).collect())
+                        .unwrap_or_default();
+                    class_methods.sort();
+                    class_methods.dedup();
+                    if class_methods.is_empty() {
                         println!("  (none)");
                     } else {
-                            let mut by_method: HashMap<String, Vec<String>> = HashMap::new();
-                            for c in &calls_from {
-                                by_method.entry(c.caller_method.clone()).or_default().push(c.callee.clone());
-                            }
-                            let mut methods: Vec<String> = by_method.keys().cloned().collect();
-                            methods.sort();
-                            for method in &methods {
-                                let callees = by_method.get(method).cloned().unwrap_or_default();
+                        for method in &class_methods {
+                            let calls_from: Vec<_> = cg.calls.iter()
+                                .filter(|c| c.caller_class == *cn && c.caller_method == *method)
+                                .collect();
+                            if calls_from.is_empty() { continue; }
+                            let trace_depth = if trace { depth } else { 1 };
+                            if trace_depth >= 1 {
                                 println!("  {}() calls:", method);
-                                let mut unique: Vec<String> = callees.clone();
-                                unique.sort();
-                                unique.dedup();
-                                for callee in &unique {
-                                    let count = callees.iter().filter(|c| c.as_str() == callee.as_str()).count();
-                                    let via_types: Vec<&str> = calls_from.iter()
-                                        .filter(|c| c.caller_method.as_str() == method.as_str() && c.callee.as_str() == callee.as_str())
-                                        .map(|c| c.target_expr.as_str())
-                                        .collect();
-                                    let via = if via_types.is_empty() || via_types[0].is_empty() {
-                                        String::new()
-                                    } else {
-                                        format!(" via {}", via_types[0])
-                                    };
-                                    println!("    ├── {}{} ({}x)", callee, via, count);
-
-                                    // Trace: check if this callee is an interface method → show dispatch
-                                    if trace {
-                                        trace_dispatch(&tg, &cg, cn, method, callee, via_types.first().copied().unwrap_or(""));
-                                    }
-                                }
+                                print_call_tree(&tg, &cg, cn, method, &mut HashSet::new(), "    ", trace_depth);
+                            }
                         }
                     }
                 }
 
                 if !only_outbound {
                     println!("\n── Inbound calls (what calls {}) ──", cn);
-                    let class_methods: Vec<String> = tg.classes.get(cn.as_str())
+                    let mut class_methods: Vec<String> = tg.classes.get(cn.as_str())
                         .map(|c| c.methods.iter().filter(|m| !m.method.starts_with("get_") && !m.method.starts_with("set_")).map(|m| m.method.clone()).collect())
                         .unwrap_or_default();
+                    class_methods.sort();
+                    class_methods.dedup();
 
                     let all_callees_of_class: Vec<&str> = if class_methods.is_empty() {
                         // Try matching class name as callee
@@ -521,56 +506,94 @@ pub fn handle_callgraph(path: &str, class: Option<&str>, _depth: usize, only_out
     Ok(())
 }
 
-fn trace_dispatch(tg: &crate::resolve::types::TypeGraph, cg: &CallGraph,
-    _caller_class: &str, _caller_method: &str, callee: &str, target_expr: &str)
-{
-    let matching_interfaces: Vec<(String, Vec<String>)> = tg.interfaces.iter()
-        .filter(|(_, iface)| {
-            iface.methods.iter().any(|m| m.method == callee)
-        })
-        .map(|(name, _iface)| {
-            let impls: Vec<String> = tg.concrete_subclasses(name)
-                .iter().map(|c| c.name.clone()).collect();
-            (name.clone(), impls)
-        })
-        .filter(|(_, impls)| !impls.is_empty())
+fn resolve_callee_class(callee: &str, target_expr: &str, tg: &TypeGraph) -> Option<String> {
+    if !target_expr.is_empty() && tg.classes.contains_key(target_expr) {
+        return Some(target_expr.to_string());
+    }
+    for (class_name, class_info) in &tg.classes {
+        if class_info.methods.iter().any(|m| m.method == callee) {
+            return Some(class_name.clone());
+        }
+    }
+    None
+}
+
+fn print_call_tree(
+    tg: &TypeGraph,
+    cg: &CallGraph,
+    class: &str,
+    method: &str,
+    visited: &mut HashSet<(String, String)>,
+    prefix: &str,
+    depth: usize,
+) {
+    if depth == 0 { return; }
+
+    let key = (class.to_string(), method.to_string());
+    if !visited.insert(key.clone()) {
+        println!("{}  (cycle)", prefix);
+        return;
+    }
+
+    let calls: Vec<_> = cg.calls.iter()
+        .filter(|c| c.caller_class == class && c.caller_method == method)
         .collect();
 
-    if matching_interfaces.is_empty() { return; }
+    if calls.is_empty() {
+        visited.remove(&key);
+        return;
+    }
 
-    println!();
-    for (iface_name, implementors) in &matching_interfaces {
-        println!("    ══ DISPATCH TRACE: {} → {} ══", target_expr, iface_name);
-        println!("    Condition: {}.{}()", target_expr, callee);
-        println!("    Interface: {} ({} implementations)", iface_name, implementors.len());
+    let mut by_callee: HashMap<String, Vec<&CallSite>> = HashMap::new();
+    for c in &calls {
+        by_callee.entry(c.callee.clone()).or_default().push(c);
+    }
 
-        for impl_class in implementors {
-            println!("\n    ── {} implements {} ──", impl_class, iface_name);
-            let impl_calls: Vec<_> = cg.calls.iter()
-                .filter(|c| c.caller_class == *impl_class)
-                .collect();
+    let mut callee_names: Vec<String> = by_callee.keys().cloned().collect();
+    callee_names.sort();
+    let total = callee_names.len();
 
-            if impl_calls.is_empty() {
-                println!("      (no internal calls)");
-            } else {
-                let mut by_impl_method: HashMap<String, Vec<String>> = HashMap::new();
-                for c in &impl_calls {
-                    by_impl_method.entry(c.caller_method.clone()).or_default().push(c.callee.clone());
-                }
-                let mut impl_methods: Vec<String> = by_impl_method.keys().cloned().collect();
-                impl_methods.sort();
-                for im in &impl_methods {
-                    let im_callees = by_impl_method.get(im.as_str()).cloned().unwrap_or_default();
-                    let mut unique: Vec<String> = im_callees.clone();
-                    unique.sort();
-                    unique.dedup();
-                    let call_list: Vec<String> = unique.iter().map(|c| format!("{}()", c)).collect();
-                    println!("      {}() → {}", im, call_list.join(", "));
+    for (i, callee) in callee_names.iter().enumerate() {
+        let sites = &by_callee[callee];
+        let count = sites.len();
+        let first = sites[0];
+        let via = if first.target_expr.is_empty() { String::new() } else { format!(" via {}", first.target_expr) };
+
+        let is_last = i == total - 1;
+        let connector = if is_last { "└──" } else { "├──" };
+        let next_prefix = format!("{}{}", prefix, if is_last { "   " } else { "│  " });
+
+        println!("{}{} {}{} ({}x)", prefix, connector, callee, via, count);
+
+        let dispatch_ifaces: Vec<(String, Vec<String>)> = tg.interfaces.iter()
+            .filter(|(_, iface)| iface.methods.iter().any(|m| m.method == callee.as_str()))
+            .filter_map(|(name, _)| {
+                let impls: Vec<String> = tg.concrete_subclasses(name)
+                    .iter().map(|c| c.name.clone()).collect();
+                if impls.is_empty() { None } else { Some((name.clone(), impls)) }
+            })
+            .collect();
+
+        if !dispatch_ifaces.is_empty() {
+            for (iface_name, implementors) in &dispatch_ifaces {
+                println!("{}══ DISPATCH: {} → {} ══", next_prefix, first.target_expr, iface_name);
+                for impl_class in implementors {
+                    println!("{}── {} ──", next_prefix, impl_class);
+                    print_call_tree(tg, cg, impl_class, callee,
+                                  &mut HashSet::new(),
+                                  &format!("{}  ", next_prefix), depth - 1);
                 }
             }
+        } else {
+            if let Some(resolved_class) = resolve_callee_class(callee, &first.target_expr, tg) {
+                let mut branch_visited = if resolved_class == class { visited.clone() } else { HashSet::new() };
+                print_call_tree(tg, cg, &resolved_class, callee, &mut branch_visited,
+                              &next_prefix, depth - 1);
+            }
         }
-        println!();
     }
+
+    visited.remove(&key);
 }
 
 fn collect_cs_files(dir: &Path, files: &mut Vec<String>) {
