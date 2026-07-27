@@ -343,10 +343,10 @@ mod tests {
         let methods = vec![
             MethodDescriptor { class: "IComponent".into(), method: "Add".into(),
                 signature: "IComponent Add".into(), is_static: false,
-                is_virtual: false, is_abstract: false },
+                is_virtual: false, is_abstract: false, file: String::new(), line_start: 0, line_end: 0 },
             MethodDescriptor { class: "IComponent".into(), method: "Render".into(),
                 signature: "void Render".into(), is_static: false,
-                is_virtual: false, is_abstract: false },
+                is_virtual: false, is_abstract: false, file: String::new(), line_start: 0, line_end: 0 },
         ];
 
         let mut tg = TypeGraph::new();
@@ -359,7 +359,7 @@ mod tests {
             interfaces: vec!["IComponent".into()],
             methods: vec![MethodDescriptor { class: "Leaf".into(), method: "Render".into(),
                 signature: "void Render".into(), is_static: false,
-                is_virtual: false, is_abstract: false }],
+                is_virtual: false, is_abstract: false, file: String::new(), line_start: 0, line_end: 0 }],
             fields: vec![],
             is_abstract: false, is_sealed: false, is_static: false,
         });
@@ -369,10 +369,10 @@ mod tests {
             methods: vec![
                 MethodDescriptor { class: "Composite".into(), method: "Add".into(),
                     signature: "void Add".into(), is_static: false,
-                    is_virtual: false, is_abstract: false },
+                    is_virtual: false, is_abstract: false, file: String::new(), line_start: 0, line_end: 0 },
                 MethodDescriptor { class: "Composite".into(), method: "Render".into(),
                     signature: "void Render".into(), is_static: false,
-                    is_virtual: false, is_abstract: false },
+                    is_virtual: false, is_abstract: false, file: String::new(), line_start: 0, line_end: 0 },
             ],
             fields: vec![],
             is_abstract: false, is_sealed: false, is_static: false,
@@ -392,6 +392,7 @@ mod tests {
                 method: format!("Method{}", i),
                 signature: format!("void Method{}", i),
                 is_static: false, is_virtual: false, is_abstract: false,
+                file: String::new(), line_start: 0, line_end: 0,
             }).collect(),
             fields: vec![],
             is_abstract: false, is_sealed: false, is_static: false,
@@ -412,7 +413,7 @@ mod tests {
             interfaces: vec!["IDraw".into()],
             methods: vec![MethodDescriptor { class: "Shape".into(), method: "Draw".into(),
                 signature: "void Draw".into(), is_static: false,
-                is_virtual: true, is_abstract: false }],
+                is_virtual: true, is_abstract: false, file: String::new(), line_start: 0, line_end: 0 }],
             fields: vec![],
             is_abstract: true, is_sealed: false, is_static: false,
         });
@@ -421,7 +422,7 @@ mod tests {
             interfaces: vec![],
             methods: vec![MethodDescriptor { class: "Circle".into(), method: "Draw".into(),
                 signature: "void Draw".into(), is_static: false,
-                is_virtual: false, is_abstract: false }],
+                is_virtual: false, is_abstract: false, file: String::new(), line_start: 0, line_end: 0 }],
             fields: vec![],
             is_abstract: false, is_sealed: false, is_static: false,
         });
@@ -430,7 +431,7 @@ mod tests {
             interfaces: vec![],
             methods: vec![MethodDescriptor { class: "Square".into(), method: "Draw".into(),
                 signature: "void Draw".into(), is_static: false,
-                is_virtual: false, is_abstract: false }],
+                is_virtual: false, is_abstract: false, file: String::new(), line_start: 0, line_end: 0 }],
             fields: vec![],
             is_abstract: false, is_sealed: false, is_static: false,
         });

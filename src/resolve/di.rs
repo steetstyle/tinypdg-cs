@@ -86,11 +86,7 @@ pub fn resolve_di(
                 // (without specific method - caller must resolve further)
                 MethodDescriptor {
                     class: cls.name.clone(),
-                    method: String::new(),
-                    signature: String::new(),
-                    is_static: false,
-                    is_virtual: false,
-                    is_abstract: false,
+                    ..Default::default()
                 }
             })
         })

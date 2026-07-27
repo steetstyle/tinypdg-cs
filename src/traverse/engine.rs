@@ -12,7 +12,7 @@ pub fn run(state: &mut TraversalState, tg: &TypeGraph, cg: &CallGraph) -> Result
 
     loop {
         display::print_header(state);
-        display::print_code(&state.current);
+        display::print_code(state, tg);
         println!("  {} Down (calls):", "↓");
         display::print_nav(&state.down, "↓");
         println!("  {} Up (called by):", "↑");

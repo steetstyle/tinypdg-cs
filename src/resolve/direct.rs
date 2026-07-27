@@ -39,10 +39,8 @@ pub fn resolve_direct(
             CallTarget::Instance { method } => method.clone(),
             _ => return None,
         },
-        signature: String::new(),
         is_static: matches!(&target, CallTarget::Static { .. }),
-        is_virtual: false,
-        is_abstract: false,
+        ..Default::default()
     }];
 
     Some(CallSite {

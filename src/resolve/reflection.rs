@@ -48,10 +48,7 @@ pub fn resolve_reflection(
         vec![MethodDescriptor {
             class: type_name.to_string(),
             method: method_name.unwrap_or_default().to_string(),
-            signature: String::new(),
-            is_static: false,
-            is_virtual: false,
-            is_abstract: false,
+            ..Default::default()
         }]
     } else {
         vec![]

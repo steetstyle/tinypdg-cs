@@ -121,7 +121,7 @@ impl ResolutionSet {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default, serde::Serialize)]
 pub struct MethodDescriptor {
     pub class: String,
     pub method: String,
@@ -129,6 +129,12 @@ pub struct MethodDescriptor {
     pub is_static: bool,
     pub is_virtual: bool,
     pub is_abstract: bool,
+    #[serde(default)]
+    pub file: String,
+    #[serde(default)]
+    pub line_start: usize,
+    #[serde(default)]
+    pub line_end: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize)]
@@ -244,6 +250,24 @@ impl TypeGraph {
             || class.base_class.as_ref().map_or(false, |base| {
                 self.classes.get(base).map_or(false, |c| self.implements_interface(c, iface))
             })
+    }
+
+    /// Populate method file paths after parsing.
+    pub fn annotate_method_files(&mut self, file: &str) {
+        for ci in self.classes.values_mut() {
+            for m in &mut ci.methods {
+                if m.file.is_empty() {
+                    m.file = file.to_string();
+                }
+            }
+        }
+        for ii in self.interfaces.values_mut() {
+            for m in &mut ii.methods {
+                if m.file.is_empty() {
+                    m.file = file.to_string();
+                }
+            }
+        }
     }
 }
 

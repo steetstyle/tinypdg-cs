@@ -585,14 +585,17 @@ mod tests {
                 class: "ICommand".into(), method: "Run".into(),
                 signature: "void Run".into(),
                 is_static: false, is_virtual: false, is_abstract: false,
-            }],
+file: String::new(),
+line_start: 0,
+line_end: 0
+}],
         });
         tg.classes.insert("SaveCmd".into(), ClassInfo {
             name: "SaveCmd".into(), base_class: None,
             interfaces: vec!["ICommand".into()],
             methods: vec![MethodDescriptor { class: "SaveCmd".into(), method: "Run".into(),
                 signature: "void Run".into(), is_static: false,
-                is_virtual: false, is_abstract: false }],
+                is_virtual: false, is_abstract: false, file: String::new(), line_start: 0, line_end: 0 }],
             fields: vec![],
             is_abstract: false, is_sealed: false, is_static: false,
         });
@@ -601,7 +604,7 @@ mod tests {
             interfaces: vec!["ICommand".into()],
             methods: vec![MethodDescriptor { class: "DeleteCmd".into(), method: "Run".into(),
                 signature: "void Run".into(), is_static: false,
-                is_virtual: false, is_abstract: false }],
+                is_virtual: false, is_abstract: false, file: String::new(), line_start: 0, line_end: 0 }],
             fields: vec![],
             is_abstract: false, is_sealed: false, is_static: false,
         });
@@ -619,14 +622,17 @@ mod tests {
                 class: "IState".into(), method: "Handle".into(),
                 signature: "void Handle".into(),
                 is_static: false, is_virtual: false, is_abstract: false,
-            }],
+file: String::new(),
+line_start: 0,
+line_end: 0
+}],
         });
         tg.classes.insert("ConcreteStateA".into(), ClassInfo {
             name: "ConcreteStateA".into(), base_class: None,
             interfaces: vec!["IState".into()],
             methods: vec![MethodDescriptor { class: "ConcreteStateA".into(), method: "Handle".into(),
                 signature: "void Handle".into(), is_static: false,
-                is_virtual: false, is_abstract: false }],
+                is_virtual: false, is_abstract: false, file: String::new(), line_start: 0, line_end: 0 }],
             fields: vec![], is_abstract: false, is_sealed: false, is_static: false,
         });
         tg.classes.insert("ConcreteStateB".into(), ClassInfo {
@@ -634,7 +640,7 @@ mod tests {
             interfaces: vec!["IState".into()],
             methods: vec![MethodDescriptor { class: "ConcreteStateB".into(), method: "Handle".into(),
                 signature: "void Handle".into(), is_static: false,
-                is_virtual: false, is_abstract: false }],
+                is_virtual: false, is_abstract: false, file: String::new(), line_start: 0, line_end: 0 }],
             fields: vec![], is_abstract: false, is_sealed: false, is_static: false,
         });
         // Build a callgraph where ConcreteStateA calls Handle on itself
@@ -668,13 +674,13 @@ mod tests {
             methods: vec![
                 MethodDescriptor { class: "DataProcessor".into(), method: "Process".into(),
                     signature: "void Process".into(),
-                    is_static: false, is_virtual: false, is_abstract: false },
+                    is_static: false, is_virtual: false, is_abstract: false, file: String::new(), line_start: 0, line_end: 0 },
                 MethodDescriptor { class: "DataProcessor".into(), method: "ReadData".into(),
                     signature: "string ReadData".into(),
-                    is_static: false, is_virtual: false, is_abstract: true },
+                    is_static: false, is_virtual: false, is_abstract: true, file: String::new(), line_start: 0, line_end: 0 },
                 MethodDescriptor { class: "DataProcessor".into(), method: "WriteData".into(),
                     signature: "void WriteData".into(),
-                    is_static: false, is_virtual: false, is_abstract: true },
+                    is_static: false, is_virtual: false, is_abstract: true, file: String::new(), line_start: 0, line_end: 0 },
             ],
             fields: vec![],
             is_abstract: true, is_sealed: false, is_static: false,
@@ -693,17 +699,20 @@ mod tests {
                 class: "IElement".into(), method: "Accept".into(),
                 signature: "void Accept".into(),
                 is_static: false, is_virtual: false, is_abstract: false,
-            }],
+file: String::new(),
+line_start: 0,
+line_end: 0
+}],
         });
         tg.interfaces.insert("IVisitor".into(), InterfaceInfo {
             name: "IVisitor".into(),
             methods: vec![
                 MethodDescriptor { class: "IVisitor".into(), method: "VisitA".into(),
                     signature: "void VisitA".into(),
-                    is_static: false, is_virtual: false, is_abstract: false },
+                    is_static: false, is_virtual: false, is_abstract: false, file: String::new(), line_start: 0, line_end: 0 },
                 MethodDescriptor { class: "IVisitor".into(), method: "VisitB".into(),
                     signature: "void VisitB".into(),
-                    is_static: false, is_virtual: false, is_abstract: false },
+                    is_static: false, is_virtual: false, is_abstract: false, file: String::new(), line_start: 0, line_end: 0 },
             ],
         });
         tg.classes.insert("ElemA".into(), ClassInfo {
@@ -711,7 +720,7 @@ mod tests {
             interfaces: vec!["IElement".into()],
             methods: vec![MethodDescriptor { class: "ElemA".into(), method: "Accept".into(),
                 signature: "void Accept".into(), is_static: false,
-                is_virtual: false, is_abstract: false }],
+                is_virtual: false, is_abstract: false, file: String::new(), line_start: 0, line_end: 0 }],
             fields: vec![],
             is_abstract: false, is_sealed: false, is_static: false,
         });
@@ -720,7 +729,7 @@ mod tests {
             interfaces: vec!["IElement".into()],
             methods: vec![MethodDescriptor { class: "ElemB".into(), method: "Accept".into(),
                 signature: "void Accept".into(), is_static: false,
-                is_virtual: false, is_abstract: false }],
+                is_virtual: false, is_abstract: false, file: String::new(), line_start: 0, line_end: 0 }],
             fields: vec![],
             is_abstract: false, is_sealed: false, is_static: false,
         });
@@ -737,7 +746,7 @@ mod tests {
             interfaces: vec!["IEnumerable".into()],
             methods: vec![MethodDescriptor { class: "MyList".into(), method: "GetEnumerator".into(),
                 signature: "IEnumerator GetEnumerator".into(),
-                is_static: false, is_virtual: false, is_abstract: false }],
+                is_static: false, is_virtual: false, is_abstract: false, file: String::new(), line_start: 0, line_end: 0 }],
             fields: vec![],
             is_abstract: false, is_sealed: false, is_static: false,
         });
@@ -754,7 +763,7 @@ mod tests {
             interfaces: vec!["IObservable".into()],
             methods: vec![MethodDescriptor { class: "StockTicker".into(),
                 method: "Subscribe".into(), signature: "void Subscribe".into(),
-                is_static: false, is_virtual: false, is_abstract: false }],
+                is_static: false, is_virtual: false, is_abstract: false, file: String::new(), line_start: 0, line_end: 0 }],
             fields: vec![],
             is_abstract: false, is_sealed: false, is_static: false,
         });
@@ -771,10 +780,10 @@ mod tests {
             methods: vec![
                 MethodDescriptor { class: "IHandler".into(), method: "Process".into(),
                     signature: "void Process".into(),
-                    is_static: false, is_virtual: false, is_abstract: false },
+                    is_static: false, is_virtual: false, is_abstract: false, file: String::new(), line_start: 0, line_end: 0 },
                 MethodDescriptor { class: "IHandler".into(), method: "SetNext".into(),
                     signature: "void SetNext".into(),
-                    is_static: false, is_virtual: false, is_abstract: false },
+                    is_static: false, is_virtual: false, is_abstract: false, file: String::new(), line_start: 0, line_end: 0 },
             ],
         });
         tg.classes.insert("AuthHandler".into(), ClassInfo {
@@ -783,10 +792,10 @@ mod tests {
             methods: vec![
                 MethodDescriptor { class: "AuthHandler".into(), method: "Process".into(),
                     signature: "void Process".into(),
-                    is_static: false, is_virtual: false, is_abstract: false },
+                    is_static: false, is_virtual: false, is_abstract: false, file: String::new(), line_start: 0, line_end: 0 },
                 MethodDescriptor { class: "AuthHandler".into(), method: "SetNext".into(),
                     signature: "void SetNext".into(),
-                    is_static: false, is_virtual: false, is_abstract: false },
+                    is_static: false, is_virtual: false, is_abstract: false, file: String::new(), line_start: 0, line_end: 0 },
             ],
             fields: vec![],
             is_abstract: false, is_sealed: false, is_static: false,
@@ -797,10 +806,10 @@ mod tests {
             methods: vec![
                 MethodDescriptor { class: "LogHandler".into(), method: "Process".into(),
                     signature: "void Process".into(),
-                    is_static: false, is_virtual: false, is_abstract: false },
+                    is_static: false, is_virtual: false, is_abstract: false, file: String::new(), line_start: 0, line_end: 0 },
                 MethodDescriptor { class: "LogHandler".into(), method: "SetNext".into(),
                     signature: "void SetNext".into(),
-                    is_static: false, is_virtual: false, is_abstract: false },
+                    is_static: false, is_virtual: false, is_abstract: false, file: String::new(), line_start: 0, line_end: 0 },
             ],
             fields: vec![],
             is_abstract: false, is_sealed: false, is_static: false,
@@ -819,14 +828,17 @@ mod tests {
                 class: "IExpression".into(), method: "Eval".into(),
                 signature: "int Eval".into(),
                 is_static: false, is_virtual: false, is_abstract: false,
-            }],
+file: String::new(),
+line_start: 0,
+line_end: 0
+}],
         });
         tg.classes.insert("NumberExpr".into(), ClassInfo {
             name: "NumberExpr".into(), base_class: None,
             interfaces: vec!["IExpression".into()],
             methods: vec![MethodDescriptor { class: "NumberExpr".into(),
                 method: "Eval".into(), signature: "int Eval".into(),
-                is_static: false, is_virtual: false, is_abstract: false }],
+                is_static: false, is_virtual: false, is_abstract: false, file: String::new(), line_start: 0, line_end: 0 }],
             fields: vec![],
             is_abstract: false, is_sealed: false, is_static: false,
         });
@@ -835,7 +847,7 @@ mod tests {
             interfaces: vec!["IExpression".into()],
             methods: vec![MethodDescriptor { class: "AddExpr".into(), method: "Eval".into(),
                 signature: "int Eval".into(),
-                is_static: false, is_virtual: false, is_abstract: false }],
+                is_static: false, is_virtual: false, is_abstract: false, file: String::new(), line_start: 0, line_end: 0 }],
             fields: vec![],
             is_abstract: false, is_sealed: false, is_static: false,
         });

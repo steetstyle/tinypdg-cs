@@ -1,3 +1,6 @@
+use std::fs;
+
+use crate::resolve::types::TypeGraph;
 use crate::traverse::types::*;
 
 pub fn print_header(state: &TraversalState) {
@@ -9,9 +12,41 @@ pub fn print_header(state: &TraversalState) {
     println!();
 }
 
-pub fn print_code(node: &NodeRef) {
-    println!("  {}.{}()", node.class, node.method);
-    println!("  (source: class scope — use ↓ to navigate into calls)");
+pub fn print_code(state: &TraversalState, tg: &TypeGraph) {
+    let md = tg.classes.get(&state.current.class)
+        .and_then(|c| c.methods.iter().find(|m| m.method == state.current.method))
+        .or_else(|| {
+            tg.interfaces.get(&state.current.class)
+                .and_then(|i| i.methods.iter().find(|m| m.method == state.current.method))
+        });
+
+    let md = match md {
+        Some(m) if !m.file.is_empty() && m.line_start > 0 => m,
+        _ => {
+            println!("  ⚠ Source not available (external/library method)");
+            println!();
+            return;
+        }
+    };
+
+    let source = match fs::read_to_string(&md.file) {
+        Ok(s) => s,
+        Err(_) => {
+            println!("  ⚠ Could not read source file: {}", md.file);
+            println!();
+            return;
+        }
+    };
+
+    let lines: Vec<&str> = source.lines().collect();
+    let start = md.line_start.saturating_sub(1);
+    let end = md.line_end.min(lines.len());
+
+    println!("  ┌─ {}:{}", md.file, md.line_start);
+    for (i, line) in lines[start..end].iter().enumerate() {
+        println!("  │ {:>4} {}", start + i + 1, line);
+    }
+    println!("  └─");
     println!();
 }
 

@@ -270,6 +270,8 @@ fn extract_method(node: Node, source: &str) -> Option<MethodDescriptor> {
         format!("({})", param_types.join(", "))
     };
     let signature = format!("{} {}{}", return_type, name, param_str);
+    let start_pos = node.start_position();
+    let end_pos = node.end_position();
 
     Some(MethodDescriptor {
         class: String::new(),
@@ -278,6 +280,9 @@ fn extract_method(node: Node, source: &str) -> Option<MethodDescriptor> {
         is_static,
         is_virtual,
         is_abstract,
+        file: String::new(),
+        line_start: start_pos.row + 1,
+        line_end: end_pos.row + 1,
     })
 }
 

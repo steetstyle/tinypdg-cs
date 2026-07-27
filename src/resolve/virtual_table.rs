@@ -111,7 +111,10 @@ mod tests {
                 is_static: false,
                 is_virtual: true,
                 is_abstract: false,
-            }],
+file: String::new(),
+line_start: 0,
+line_end: 0
+}],
             fields: vec![],
             is_abstract: false,
             is_sealed: false,
@@ -128,7 +131,10 @@ mod tests {
                 is_static: false,
                 is_virtual: false,
                 is_abstract: false,
-            }],
+file: String::new(),
+line_start: 0,
+line_end: 0
+}],
             fields: vec![],
             is_abstract: false,
             is_sealed: false,

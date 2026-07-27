@@ -53,10 +53,29 @@ pub struct TraversalState {
 }
 
 impl TraversalState {
-    pub fn init(tg: &TypeGraph, cg: &CallGraph, class: &str, context: Option<String>) -> Option<Self> {
+    pub fn init(tg: &TypeGraph, cg: &CallGraph, class: &str, context: Option<String>) -> Result<Self, String> {
+        let lower = class.to_lowercase();
         let class_name = tg.classes.keys()
-            .find(|k| k.to_lowercase().contains(&class.to_lowercase()))?;
-        let class_info = tg.classes.get(class_name)?;
+            .find(|k| k.eq_ignore_ascii_case(class))
+            .or_else(|| {
+                let matches: Vec<&String> = tg.classes.keys()
+                    .filter(|k| k.to_lowercase().contains(&lower))
+                    .collect();
+                if matches.len() == 1 { Some(matches[0]) } else { None }
+            })
+            .ok_or_else(|| {
+                let matches: Vec<&String> = tg.classes.keys()
+                    .filter(|k| k.to_lowercase().contains(&lower))
+                    .collect();
+                if matches.is_empty() {
+                    format!("Class '{}' not found", class)
+                } else {
+                    let names: Vec<_> = matches.iter().map(|k| k.as_str()).collect();
+                    format!("'{}' matches multiple classes:\n  {}\nUse an exact class name.", class, names.join("\n  "))
+                }
+            })?;
+        let class_info = tg.classes.get(class_name)
+            .ok_or_else(|| format!("Class '{}' not found", class_name))?;
 
         let methods: Vec<String> = class_info.methods.iter()
             .filter(|m| {
@@ -68,7 +87,9 @@ impl TraversalState {
             .map(|m| m.method.clone())
             .collect();
 
-        if methods.is_empty() { return None; }
+        if methods.is_empty() {
+            return Err(format!("Class '{}' has no methods to traverse", class_name));
+        }
 
         let first = &methods[0];
         let remaining: Vec<NodeRef> = methods[1..].iter().map(|m| mk_node(tg, class_name, m)).collect();
@@ -77,7 +98,7 @@ impl TraversalState {
         let down = resolve_down(cg, tg, &current);
         let up = resolve_up(cg, tg, &current);
 
-        Some(TraversalState {
+        Ok(TraversalState {
             current,
             queue: remaining,
             history: Vec::new(),

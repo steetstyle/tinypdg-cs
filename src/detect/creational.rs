@@ -152,7 +152,10 @@ mod tests {
                 class: "Config".into(), method: "get_Instance".into(),
                 signature: "Config get_Instance".into(),
                 is_static: true, is_virtual: false, is_abstract: false,
-            }],
+file: String::new(),
+line_start: 0,
+line_end: 0
+}],
             fields: vec![],
             is_abstract: false, is_sealed: false, is_static: false,
         });
@@ -173,7 +176,10 @@ mod tests {
                 class: "Factory".into(), method: "Make".into(),
                 signature: "IService Make".into(),
                 is_static: false, is_virtual: false, is_abstract: false,
-            }],
+file: String::new(),
+line_start: 0,
+line_end: 0
+}],
             fields: vec![],
             is_abstract: false, is_sealed: false, is_static: false,
         });
@@ -192,12 +198,18 @@ mod tests {
                     class: "IWidgetFactory".into(), method: "MakeButton".into(),
                     signature: "IButton MakeButton".into(),
                     is_static: false, is_virtual: false, is_abstract: false,
-                },
+file: String::new(),
+line_start: 0,
+line_end: 0
+},
                 MethodDescriptor {
                     class: "IWidgetFactory".into(), method: "MakeDialog".into(),
                     signature: "IDialog MakeDialog".into(),
                     is_static: false, is_virtual: false, is_abstract: false,
-                },
+file: String::new(),
+line_start: 0,
+line_end: 0
+},
             ],
         });
         tg.interfaces.insert("IButton".into(), InterfaceInfo {
@@ -219,13 +231,13 @@ mod tests {
             methods: vec![
                 MethodDescriptor { class: "HtmlBuilder".into(), method: "SetTitle".into(),
                     signature: "HtmlBuilder SetTitle".into(),
-                    is_static: false, is_virtual: false, is_abstract: false },
+                    is_static: false, is_virtual: false, is_abstract: false, file: String::new(), line_start: 0, line_end: 0 },
                 MethodDescriptor { class: "HtmlBuilder".into(), method: "SetBody".into(),
                     signature: "HtmlBuilder SetBody".into(),
-                    is_static: false, is_virtual: false, is_abstract: false },
+                    is_static: false, is_virtual: false, is_abstract: false, file: String::new(), line_start: 0, line_end: 0 },
                 MethodDescriptor { class: "HtmlBuilder".into(), method: "Build".into(),
                     signature: "string Build".into(),
-                    is_static: false, is_virtual: false, is_abstract: false },
+                    is_static: false, is_virtual: false, is_abstract: false, file: String::new(), line_start: 0, line_end: 0 },
             ],
             fields: vec![],
             is_abstract: false, is_sealed: false, is_static: false,

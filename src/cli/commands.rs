@@ -333,8 +333,8 @@ pub fn handle_traverse(path: &str, class: &str, context: Option<&str>) -> Result
     let (tg, cg) = load_project(path)?;
 
     let mut state = match crate::traverse::types::TraversalState::init(&tg, &cg, class, context.map(|s| s.to_string())) {
-        Some(s) => s,
-        None => anyhow::bail!("Class '{}' not found or has no methods", class),
+        Ok(s) => s,
+        Err(e) => anyhow::bail!("{}", e),
     };
 
     crate::traverse::engine::run(&mut state, &tg, &cg)?;
@@ -650,7 +650,9 @@ fn load_project(path: &Path) -> Result<(TypeGraph, CallGraph)> {
             Ok(s) => s,
             Err(_) => continue,
         };
-        let file_cg = CallGraphBuilder::build(tree.root_node(), &source, &st.type_graph);
+        let mut local_tg = st.type_graph;
+        local_tg.annotate_method_files(file);
+        let file_cg = CallGraphBuilder::build(tree.root_node(), &source, &local_tg);
         for call in file_cg.calls {
             cg.calls.push(call);
         }
@@ -661,13 +663,13 @@ fn load_project(path: &Path) -> Result<(TypeGraph, CallGraph)> {
             cg.class_creations.entry(k).or_default().extend(v);
         }
         if type_graph.is_none() {
-            type_graph = Some(st.type_graph);
-        } else if let Some(ref mut tg) = type_graph {
-            for (name, info) in st.type_graph.classes {
-                tg.classes.entry(name).or_insert(info);
+            type_graph = Some(local_tg);
+        } else if let Some(ref mut agg) = type_graph {
+            for (name, info) in local_tg.classes {
+                agg.classes.entry(name).or_insert(info);
             }
-            for (name, info) in st.type_graph.interfaces {
-                tg.interfaces.entry(name).or_insert(info);
+            for (name, info) in local_tg.interfaces {
+                agg.interfaces.entry(name).or_insert(info);
             }
         }
     }
