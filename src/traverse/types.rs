@@ -585,12 +585,7 @@ fn is_subtype(tg: &TypeGraph, derived: &str, base: &str) -> bool {
 fn params_type_match(tg: &TypeGraph, a: &[String], b: &[String]) -> bool {
     for ap in a {
         for bp in b {
-            if ap == bp
-                || is_subtype(tg, ap, bp)
-                || is_subtype(tg, bp, ap)
-                || ap.contains(bp.as_str())
-                || bp.contains(ap.as_str())
-            {
+            if ap == bp || is_subtype(tg, ap, bp) || is_subtype(tg, bp, ap) {
                 return true;
             }
         }
@@ -754,19 +749,6 @@ mod tests {
     fn test_params_type_match_subtype() {
         let (tg, _) = build_tg_and_cg("class EventBase {} class OrderEvent : EventBase {}");
         assert!(params_type_match(&tg, &["OrderEvent".into()], &["EventBase".into()]));
-    }
-
-    #[test]
-    fn test_params_type_match_containment() {
-        let (tg, _) = build_tg_and_cg("class A {}");
-        // "IntegrationEvent" is contained in "OrderIntegrationEvent"
-        assert!(params_type_match(&tg, &["OrderIntegrationEvent".into()], &["IntegrationEvent".into()]));
-    }
-
-    #[test]
-    fn test_params_type_match_containment_rev() {
-        let (tg, _) = build_tg_and_cg("class A {}");
-        assert!(params_type_match(&tg, &["IntegrationEvent".into()], &["OrderIntegrationEvent".into()]));
     }
 
     #[test]
