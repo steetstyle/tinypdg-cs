@@ -13,3 +13,4 @@ pub mod route;
 pub use parse::parser;
 pub use cfg::builder as cfg_builder;
 pub use pdg::pdg_builder;
+pub use graph::dot;
