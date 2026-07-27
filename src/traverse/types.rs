@@ -597,13 +597,29 @@ fn params_type_match(tg: &TypeGraph, a: &[String], b: &[String]) -> bool {
     false
 }
 
+fn extract_type_name(param: &str) -> &str {
+    let type_part = param.rsplit_once(' ').map_or(param, |(t, _)| t.trim());
+    // Strip common modifiers
+    type_part.trim_start_matches("ref ").trim_start_matches("out ").trim_start_matches("in ")
+        .trim_start_matches("params ")
+}
+
+fn is_user_type(tg: &TypeGraph, param: &str) -> bool {
+    let type_name = extract_type_name(param);
+    tg.classes.contains_key(type_name) || tg.interfaces.contains_key(type_name)
+}
+
 fn find_dispatch_sources(tg: &TypeGraph, cg: &CallGraph, node: &NodeRef) -> Vec<NavEntry> {
-    let cur_params = match tg.classes.get(&node.class)
+    let all_params = match tg.classes.get(&node.class)
         .and_then(|c| c.methods.iter().find(|m| m.method == node.method))
     {
         Some(m) => parse_sig_param_types(&m.signature),
         None => return Vec::new(),
     };
+    // Only match on user-defined types (ignore string, int, etc.)
+    let cur_params: Vec<String> = all_params.into_iter()
+        .filter(|p| is_user_type(tg, p))
+        .collect();
     if cur_params.is_empty() {
         return Vec::new();
     }
@@ -615,7 +631,8 @@ fn find_dispatch_sources(tg: &TypeGraph, cg: &CallGraph, node: &NodeRef) -> Vec<
     for (class_name, class_info) in &tg.classes {
         if *class_name == node.class { continue; }
         for md in &class_info.methods {
-            let md_params = parse_sig_param_types(&md.signature);
+            let md_params: Vec<String> = parse_sig_param_types(&md.signature)
+                .into_iter().filter(|p| is_user_type(tg, p)).collect();
             if !params_type_match(tg, &cur_params, &md_params) { continue; }
 
             // Check if this method calls an unresolvable (external) method
@@ -1078,6 +1095,46 @@ class EventBusService { public void PublishThroughBus(OrderIntegrationEvent evt)
     }
 
     // ─── find_dispatch_sources ──────────────────────────────────────
+
+    #[test]
+    fn test_extract_type_name_simple() {
+        assert_eq!(extract_type_name("int x"), "int");
+        assert_eq!(extract_type_name("string key"), "string");
+        assert_eq!(extract_type_name("CatalogServices services"), "CatalogServices");
+    }
+
+    #[test]
+    fn test_extract_type_name_with_modifiers() {
+        assert_eq!(extract_type_name("ref string value"), "string");
+        assert_eq!(extract_type_name("out int result"), "int");
+        assert_eq!(extract_type_name("params string[] args"), "string[]");
+    }
+
+    #[test]
+    fn test_extract_type_name_generic() {
+        assert_eq!(extract_type_name("List<CatalogItem> items"), "List<CatalogItem>");
+        assert_eq!(extract_type_name("Task<Results<NoContent, NotFound>> id"), "Task<Results<NoContent, NotFound>>");
+    }
+
+    #[test]
+    fn test_is_user_type_primitive() {
+        let (tg, _) = build_tg_and_cg("class A {}");
+        assert!(!is_user_type(&tg, "int x"));
+        assert!(!is_user_type(&tg, "string key"));
+        assert!(!is_user_type(&tg, "bool flag"));
+    }
+
+    #[test]
+    fn test_is_user_type_class() {
+        let (tg, _) = build_tg_and_cg("class CatalogServices {} class Handler { void M(CatalogServices s) {} }");
+        assert!(is_user_type(&tg, "CatalogServices s"));
+    }
+
+    #[test]
+    fn test_is_user_type_interface() {
+        let (tg, _) = build_tg_and_cg("interface IEventHandler {} class Handler { void M(IEventHandler h) {} }");
+        assert!(is_user_type(&tg, "IEventHandler h"));
+    }
 
     #[test]
     fn test_find_dispatch_sources_none() {
