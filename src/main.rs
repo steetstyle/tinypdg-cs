@@ -71,6 +71,8 @@ enum Commands {
     Route {
         #[arg(help = "Path to .cs file or project directory")]
         path: String,
+        #[arg(long, help = "Output as JSON")]
+        json: bool,
     },
     /// Interactive PRAXIS-style code traversal
     Traverse {
@@ -115,8 +117,8 @@ fn main() {
             println!("serve on {}", port);
             Ok(())
         }
-        Commands::Route { path } => {
-            tiny_pdg_cs::cli::commands::handle_route(&path)
+        Commands::Route { path, json } => {
+            tiny_pdg_cs::cli::commands::handle_route(&path, json)
         }
         Commands::Traverse { path, class, context } => {
             tiny_pdg_cs::cli::commands::handle_traverse(&path, &class, context.as_deref())

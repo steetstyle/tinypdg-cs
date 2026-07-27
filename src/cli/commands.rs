@@ -17,6 +17,7 @@ use crate::hammock::builder::find_hammocks;
 use crate::parse::parser::parse_source;
 use crate::pdg::pdg_builder::build_pdg;
 use crate::resolve::symbols::SymbolTable;
+use crate::route::RouteEntry;
 
 pub fn handle_parse(file: &str) -> Result<()> {
     let source = fs::read_to_string(file)?;
@@ -324,9 +325,56 @@ pub fn handle_detect(path: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn handle_route(path: &str) -> Result<()> {
+pub fn handle_route(path: &str, json: bool) -> Result<()> {
     let table = crate::route::extract(path)?;
-    println!("{}", serde_json::to_string_pretty(&table)?);
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&table)?);
+        return Ok(());
+    }
+
+    let controllers: Vec<&RouteEntry> = table.routes.iter().filter(|r| r.source == "Controller").collect();
+    let minimal: Vec<&RouteEntry> = table.routes.iter().filter(|r| r.source == "MinimalApi").collect();
+
+    println!("Found {} route(s)", table.routes.len());
+    println!("{}", "═".repeat(70));
+    println!("  ROUTES");
+    println!("{}", "═".repeat(70));
+
+    if !controllers.is_empty() {
+        println!("\n── Controller routes ──\n");
+        let mut by_class: std::collections::BTreeMap<&str, Vec<&&RouteEntry>> = std::collections::BTreeMap::new();
+        for r in &controllers {
+            by_class.entry(r.class.as_str()).or_default().push(r);
+        }
+        for (class, routes) in &by_class {
+            println!("  {} ({} route{}):", class, routes.len(), if routes.len() == 1 { "" } else { "s" });
+            for r in routes {
+                println!("    {:>6}  {:<30}  {}", r.http_method, r.path, r.handler);
+            }
+            println!();
+        }
+    }
+
+    if !minimal.is_empty() {
+        println!("── Minimal API routes ──\n");
+        let mut by_class: std::collections::BTreeMap<&str, Vec<&&RouteEntry>> = std::collections::BTreeMap::new();
+        for r in &minimal {
+            by_class.entry(r.class.as_str()).or_default().push(r);
+        }
+        for (class, routes) in &by_class {
+            if class.is_empty() {
+                println!("  (top-level) ({} route{}):", routes.len(), if routes.len() == 1 { "" } else { "s" });
+            } else {
+                println!("  {} ({} route{}):", class, routes.len(), if routes.len() == 1 { "" } else { "s" });
+            }
+            for r in routes {
+                println!("    {:>6}  {:<30}  {}", r.http_method, r.path, r.handler);
+            }
+            println!();
+        }
+    }
+
     Ok(())
 }
 

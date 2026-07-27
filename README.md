@@ -262,14 +262,30 @@ Extract HTTP routes from ASP.NET Controllers (`[Route]` + `[HttpGet]`, `[HttpPos
 
 ```
 $ tinypdg-cs route patterns/
-{
-  "routes": [
-    { "http_method": "GET",  "path": "/{id}", "class": "UsersController", "handler": "GetUser",  "source": "Controller" },
-    { "http_method": "POST", "path": "/",      "class": "UsersController", "handler": "CreateUser", "source": "Controller" },
-    { "http_method": "PUT",  "path": "/{id}",  "class": "UsersController", "handler": "UpdateUser", "source": "Controller" },
-    { "http_method": "GET",  "path": "/items", "class": "Startup",        "handler": "GetAllItems", "source": "MinimalApi" }
-  ]
-}
+Found 8 route(s)
+══════════════════════════════════════════════════════════════════════
+  ROUTES
+══════════════════════════════════════════════════════════════════════
+
+── Controller routes ──
+
+  OrdersController (3 routes):
+       GET  /                               GetOrders
+       GET  /{id}                           GetOrder
+      POST  /                               CreateOrder
+
+  UsersController (5 routes):
+       GET  /                               GetUsers
+       GET  /{id}                           GetUser
+      POST  /                               CreateUser
+       PUT  /{id}                           UpdateUser
+    DELETE  /{id}                           DeleteUser
+```
+
+Use `--json` for JSON output (useful for tooling/LLM consumption):
+
+```
+$ tinypdg-cs route patterns/ --json | jq '.routes[] | {http_method, path, handler}'
 ```
 
 Only classes named `*Controller` or inheriting `ControllerBase` are scanned for controller routes. Minimal API routes (`app.MapGet`, `MapPost`, `MapPut`, `MapDelete`, `MapPatch`) are extracted from `invocation_expression` nodes with handler name resolution via parent class context.
