@@ -145,6 +145,66 @@ CALL GRAPH FOR: CatalogAI
 
 The `!` suffix on `_embeddingGenerator!` marks an interface dispatch point. With `--trace`, those are expanded to show all implementations, their constructors, and what each implementation calls internally.
 
+### Interactive traverse
+
+Navigate a call graph interactively, following a dispatch chain from root cause to handler. Start from any class and step through callers/callees with full source context:
+
+```
+$ tinypdg-cs traverse src/Catalog.API --class CatalogItem
+Classes: 33, Interfaces: 2, Call sites: 706
+══════════════════════════════════════════════════════════════════════
+  Entity: CatalogItem.RemoveStock
+  Queue: 0 remaining | History: 0 steps
+══════════════════════════════════════════════════════════════════════
+
+  ┌─ src/Catalog.API/Model/CatalogItem.cs:62
+  │   62     public void RemoveStock(int quantity)
+  │   63     {
+  │   64         if (quantity < 0)
+  │   65             throw new ArgumentException("...");
+  │   66         AvailableStock -= quantity;
+  │   67     }
+  └─
+
+  ↓ Down (calls):
+    [1] Min via Math
+       (external library)
+
+  ↑ Up (called by):
+    [1] Handle via  OrderStatusChangedToPaidIntegrationEventHandler
+
+  Actions: <n> down | u<n> up | c(p|s|u) complete | d discard | h history | q quit
+  > 
+```
+
+Navigation commands:
+
+| Input | Action |
+|---|---|
+| `<n>` | Navigate down to call #n (e.g. `3` jumps to callee [3]) |
+| `u<n>` | Navigate up to caller #n (e.g. `u1` jumps to caller [1]) |
+| `<n><letter>` | Navigate down to sub-entry (interface/virtual implementor), e.g. `5a` |
+| `u<n><letter>` | Navigate up to interface sub-entry, e.g. `u1a` for first other implementor |
+| `c p` / `c s` / `c u` | Complete node as Primary / Symptom / Unrelated |
+| `d` | Discard current node, advance queue |
+| `h` | Show traversal history |
+| `q` | Quit |
+
+For example, tracing the eShop dispatch chain from `CatalogItem.RemoveStock` to the event bus:
+
+```
+> u1                                   # navigate up to OrderHandler.Handle
+                ══ INTERFACE: IIntegrationEventHandler ══
+                ├─ [1a] OtherHandler.Handle  (c=0.95)
+    [2] PublishThroughEventBusAsync via  CatalogIntegrationEventService
+    [3] SaveEventAndCatalogContextChangesAsync via  CatalogIntegrationEventService
+> u2                                   # navigate up to dispatch source
+                [6] PublishAsync via eventBus  (external library)
+> u1                                   # navigate to catalog API entry point
+```
+
+The interface and virtual edges show sub-entries (`[1a]`, `[1b]`, ...) for each implementor or override. External calls (unresolved methods) are marked `(external library)` and display the caller's source.
+
 ### Control Flow Graph
 
 ```
@@ -218,7 +278,7 @@ $ tinypdg-cs parse src/Catalog.API/Infrastructure/CatalogContext.cs
 ## Tests
 
 ```
-cargo test        # 107 tests, unit + integration + fixtures
+cargo test        # 172 tests, unit + integration + fixtures
 cargo bench       # pdg benchmarks
 ```
 
