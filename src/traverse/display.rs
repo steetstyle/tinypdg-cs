@@ -1,6 +1,7 @@
 use std::fs;
 
 use crate::resolve::types::TypeGraph;
+use crate::analysis::callgraph::CallGraph;
 use crate::traverse::types::*;
 
 pub fn print_header(state: &TraversalState) {
@@ -12,7 +13,41 @@ pub fn print_header(state: &TraversalState) {
     println!();
 }
 
-pub fn print_code(state: &TraversalState, tg: &TypeGraph) {
+pub fn print_code(state: &TraversalState, tg: &TypeGraph, cg: &CallGraph) {
+    // External node — show caller's source
+    let is_external = !tg.classes.contains_key(&state.current.class)
+        && !tg.interfaces.contains_key(&state.current.class);
+
+    if is_external {
+        let callers: Vec<&crate::analysis::callgraph::CallSite> = cg.calls.iter()
+            .filter(|c| c.callee == state.current.method && c.target_expr == state.current.class)
+            .collect();
+        if let Some(caller) = callers.first() {
+            let md = tg.classes.get(&caller.caller_class)
+                .and_then(|c| c.methods.iter().find(|m| m.method == caller.caller_method));
+            if let Some(m) = md {
+                if !m.file.is_empty() && m.line_start > 0 {
+                    if let Ok(source) = fs::read_to_string(&m.file) {
+                        let lines: Vec<&str> = source.lines().collect();
+                        let start = m.line_start.saturating_sub(1);
+                        let end = m.line_end.min(lines.len());
+                        println!("  ┌─ {} (external) {}.{}", m.file, state.current.class, state.current.method);
+                        for (i, line) in lines[start..end].iter().enumerate() {
+                            println!("  │ {:>4} {}", start + i + 1, line);
+                        }
+                        println!("  └─");
+                        println!();
+                        return;
+                    }
+                }
+            }
+        }
+        // Fallback: can't find caller context
+        println!("  (external) {}.{} — no caller context available", state.current.class, state.current.method);
+        println!();
+        return;
+    }
+
     let md = tg.classes.get(&state.current.class)
         .and_then(|c| c.methods.iter().find(|m| m.method == state.current.method))
         .or_else(|| {
@@ -60,21 +95,28 @@ pub fn print_nav(entries: &[NavEntry], label: &str) {
     while i < entries.len() {
         let entry = &entries[i];
         let marker = if entry.kind.is_dispatch() { "►" } else { " " };
-        println!("  {} [{}] {} via {} {}", marker, entry.idx, entry.callee, entry.via, entry.target.class);
+
+        if entry.target.class.is_empty() || entry.via == entry.target.class {
+            println!("  {} [{}] {} via {}", marker, entry.idx, entry.callee, entry.via);
+        } else {
+            println!("  {} [{}] {} via {} {}", marker, entry.idx, entry.callee, entry.via, entry.target.class);
+        }
 
         match &entry.kind {
             EdgeKind::Interface { interface, implementations } => {
                 println!("       ══ INTERFACE: {} ══", interface);
-                for (impl_class, conf) in implementations {
-                    println!("       ├─ [{}a] {}.{}  (c={:.2})",
-                        entry.idx, impl_class, entry.callee, conf);
+                for (i, (impl_class, conf)) in implementations.iter().enumerate() {
+                    let letter = (b'a' + i as u8) as char;
+                    println!("       ├─ [{}{}] {}.{}  (c={:.2})",
+                        entry.idx, letter, impl_class, entry.callee, conf);
                 }
             }
             EdgeKind::Virtual { base_class, overrides } => {
                 println!("       ══ VIRTUAL: {} ══", base_class);
-                for (ov_class, conf) in overrides {
-                    println!("       ├─ [{}a] {}.{}  (c={:.2})",
-                        entry.idx, ov_class, entry.callee, conf);
+                for (i, (ov_class, conf)) in overrides.iter().enumerate() {
+                    let letter = (b'a' + i as u8) as char;
+                    println!("       ├─ [{}{}] {}.{}  (c={:.2})",
+                        entry.idx, letter, ov_class, entry.callee, conf);
                 }
             }
             EdgeKind::External => {

@@ -634,9 +634,9 @@ fn load_project(path: &Path) -> Result<(TypeGraph, CallGraph)> {
         collect_cs_files(path, &mut all_cs_files);
     }
 
-    let mut cg = CallGraph::new();
-    let mut type_graph = None;
-
+    // Phase 1: parse all files, build TypeGraph
+    let mut type_graph = TypeGraph::new();
+    let mut parsed: Vec<(String, tree_sitter::Tree, String)> = Vec::new();
     for file in &all_cs_files {
         let source = match fs::read_to_string(file) {
             Ok(s) => s,
@@ -652,7 +652,19 @@ fn load_project(path: &Path) -> Result<(TypeGraph, CallGraph)> {
         };
         let mut local_tg = st.type_graph;
         local_tg.annotate_method_files(file);
-        let file_cg = CallGraphBuilder::build(tree.root_node(), &source, &local_tg);
+        for (name, info) in local_tg.classes {
+            type_graph.classes.entry(name).or_insert(info);
+        }
+        for (name, info) in local_tg.interfaces {
+            type_graph.interfaces.entry(name).or_insert(info);
+        }
+        parsed.push((file.clone(), tree, source));
+    }
+
+    // Phase 2: build CallGraph with complete TypeGraph
+    let mut cg = CallGraph::new();
+    for (_file, tree, source) in &parsed {
+        let file_cg = CallGraphBuilder::build(tree.root_node(), source, &type_graph);
         for call in file_cg.calls {
             cg.calls.push(call);
         }
@@ -662,23 +674,12 @@ fn load_project(path: &Path) -> Result<(TypeGraph, CallGraph)> {
         for (k, v) in file_cg.class_creations {
             cg.class_creations.entry(k).or_default().extend(v);
         }
-        if type_graph.is_none() {
-            type_graph = Some(local_tg);
-        } else if let Some(ref mut agg) = type_graph {
-            for (name, info) in local_tg.classes {
-                agg.classes.entry(name).or_insert(info);
-            }
-            for (name, info) in local_tg.interfaces {
-                agg.interfaces.entry(name).or_insert(info);
-            }
-        }
     }
 
-    let tg = type_graph.unwrap_or_default();
     println!("Parsed {} file(s)", all_cs_files.len());
     println!("Classes: {}, Interfaces: {}, Call sites: {}",
-        tg.classes.len(), tg.interfaces.len(), cg.calls.len());
+        type_graph.classes.len(), type_graph.interfaces.len(), cg.calls.len());
     println!();
 
-    Ok((tg, cg))
+    Ok((type_graph, cg))
 }

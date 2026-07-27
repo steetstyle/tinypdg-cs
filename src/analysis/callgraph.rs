@@ -13,6 +13,8 @@ pub struct CallSite {
     pub caller_method: String,
     /// Method being called
     pub callee: String,
+    /// Class that owns the callee method (resolved by type_graph)
+    pub callee_class: String,
     /// The expression target (e.g., "this", "SomeClass", variable name)
     pub target_expr: String,
     /// Is this a `this.Something()` or just `Something()` call?
@@ -80,7 +82,7 @@ impl CallGraph {
 pub struct CallGraphBuilder;
 
 impl CallGraphBuilder {
-    pub fn build(root: Node, source: &str, _type_graph: &TypeGraph) -> CallGraph {
+    pub fn build(root: Node, source: &str, type_graph: &TypeGraph) -> CallGraph {
         let mut cg = CallGraph::new();
         let mut cursor = root.walk();
         let mut depth = 0;
@@ -106,7 +108,7 @@ impl CallGraphBuilder {
                 }
                 "invocation_expression" => {
                     if !current_class.is_empty() && !current_method.is_empty() {
-                        if let Some(site) = Self::extract_call(node, source, &current_class, &current_method) {
+                        if let Some(site) = Self::extract_call(node, source, &current_class, &current_method, type_graph) {
                             cg.calls.push(site.clone());
                             cg.class_callees.entry(current_class.clone())
                                 .or_default()
@@ -117,6 +119,8 @@ impl CallGraphBuilder {
                         }
                     }
                 }
+
+
                 "object_creation_expression" => {
                     if !current_class.is_empty() {
                         for i in 0..node.child_count() {
@@ -160,7 +164,7 @@ impl CallGraphBuilder {
         }
     }
 
-    fn extract_call(node: Node, source: &str, caller_class: &str, caller_method: &str) -> Option<CallSite> {
+    fn extract_call(node: Node, source: &str, caller_class: &str, caller_method: &str, type_graph: &TypeGraph) -> Option<CallSite> {
         let mut callee = String::new();
         let mut target_expr = String::new();
         let mut is_self_call = false;
@@ -173,6 +177,7 @@ impl CallGraphBuilder {
             match fname {
                 Some("function") | Some("name") => {
                     if child.kind() == "member_access_expression" {
+                        // Normal .Foo() call
                         if let Some(name_node) = child.child_by_field_name("name") {
                             if let Ok(text) = name_node.utf8_text(source.as_bytes()) {
                                 callee = text.to_string();
@@ -186,7 +191,31 @@ impl CallGraphBuilder {
                                 is_self_call = true;
                             }
                         }
+                    } else if child.kind() == "conditional_access_expression" {
+                        // ?.Foo() call — first child is target, member_binding_expression has callee
+                        let mut c_cursor = child.walk();
+                        for inner in child.children(&mut c_cursor) {
+                            if inner.kind() == "member_binding_expression" {
+                                let mut m_cursor = inner.walk();
+                                for gc in inner.children(&mut m_cursor) {
+                                    if gc.kind() == "identifier" {
+                                        if let Ok(text) = gc.utf8_text(source.as_bytes()) {
+                                            callee = text.to_string();
+                                        }
+                                    }
+                                }
+                            } else if inner.kind() == "identifier" || inner.kind() == "this_expression" {
+                                // target expression (first child before ?)
+                                if let Ok(text) = inner.utf8_text(source.as_bytes()) {
+                                    target_expr = text.to_string();
+                                }
+                                if inner.kind() == "this_expression" {
+                                    is_self_call = true;
+                                }
+                            }
+                        }
                     } else {
+                        // Implicit call: Foo()
                         if let Ok(text) = child.utf8_text(source.as_bytes()) {
                             callee = text.to_string();
                         }
@@ -215,6 +244,27 @@ impl CallGraphBuilder {
             }
         }
 
+        let callee_class = if is_self_call || target_expr.is_empty() {
+            // this.Foo() or Foo() (implicit this) → caller_class
+            if type_graph.classes.get(caller_class)
+                .map(|c| c.methods.iter().any(|m| m.method == callee))
+                .unwrap_or(false)
+            {
+                caller_class.to_string()
+            } else {
+                // implicit call but method not in caller — search all classes
+                type_graph.classes.iter()
+                    .find(|(_, ci)| ci.methods.iter().any(|m| m.method == callee))
+                    .map(|(name, _)| name.clone())
+                    .unwrap_or_default()
+            }
+        } else if type_graph.classes.contains_key(&target_expr) {
+            // ClassName.Foo()
+            target_expr.clone()
+        } else {
+            String::new()
+        };
+
         if callee.is_empty() {
             None
         } else {
@@ -222,6 +272,7 @@ impl CallGraphBuilder {
                 caller_class: caller_class.to_string(),
                 caller_method: caller_method.to_string(),
                 callee,
+                callee_class,
                 target_expr,
                 is_self_call,
                 is_creation,
@@ -284,4 +335,48 @@ mod tests {
         assert!(calls.contains(&"B".to_string()));
         assert!(calls.contains(&"C".to_string()));
     }
+
+    #[test]
+    fn test_null_conditional_call() {
+        let src = "class C { void M() { x?.Foo(1); } }";
+        let tree = parse_source(src).unwrap();
+        let st = SymbolTable::from_ast(tree.root_node(), src).unwrap();
+        let cg = CallGraphBuilder::build(tree.root_node(), src, &st.type_graph);
+        assert!(cg.class_calls_method("C", "Foo"));
+        let site = cg.calls.iter().find(|c| c.callee == "Foo").unwrap();
+        assert_eq!(site.callee_class, "");
+        assert_eq!(site.target_expr, "x");
+    }
+
+    #[test]
+    fn test_self_call_callee_class() {
+        let src = "class C { void A() { this.B(); } void B() { } }";
+        let tree = parse_source(src).unwrap();
+        let st = SymbolTable::from_ast(tree.root_node(), src).unwrap();
+        let cg = CallGraphBuilder::build(tree.root_node(), src, &st.type_graph);
+        let site = cg.calls.iter().find(|c| c.callee == "B").unwrap();
+        assert_eq!(site.callee_class, "C");
+    }
+
+    #[test]
+    fn test_static_call_callee_class() {
+        let src = "class C { void M() { Singleton.GetInstance(); } } class Singleton { public static Singleton GetInstance() { return null; } }";
+        let tree = parse_source(src).unwrap();
+        let st = SymbolTable::from_ast(tree.root_node(), src).unwrap();
+        let cg = CallGraphBuilder::build(tree.root_node(), src, &st.type_graph);
+        let site = cg.calls.iter().find(|c| c.callee == "GetInstance").unwrap();
+        assert_eq!(site.callee_class, "Singleton");
+    }
+
+    #[test]
+    fn test_implicit_call_callee_class() {
+        let src = "class C { void A() { B(); } void B() { } }";
+        let tree = parse_source(src).unwrap();
+        let st = SymbolTable::from_ast(tree.root_node(), src).unwrap();
+        let cg = CallGraphBuilder::build(tree.root_node(), src, &st.type_graph);
+        let site = cg.calls.iter().find(|c| c.callee == "B").unwrap();
+        assert_eq!(site.callee_class, "C");
+    }
+
+
 }

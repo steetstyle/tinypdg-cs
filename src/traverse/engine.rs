@@ -12,7 +12,7 @@ pub fn run(state: &mut TraversalState, tg: &TypeGraph, cg: &CallGraph) -> Result
 
     loop {
         display::print_header(state);
-        display::print_code(state, tg);
+        display::print_code(state, tg, cg);
         println!("  {} Down (calls):", "↓");
         display::print_nav(&state.down, "↓");
         println!("  {} Up (called by):", "↑");
@@ -28,8 +28,14 @@ pub fn run(state: &mut TraversalState, tg: &TypeGraph, cg: &CallGraph) -> Result
             Action::Down(idx) => {
                 state.navigate_down(idx, tg, cg);
             }
+            Action::DownDispatch(idx, sub) => {
+                state.navigate_down_dispatch(idx, sub, tg, cg);
+            }
             Action::Up(idx) => {
                 state.navigate_up(idx, tg, cg);
+            }
+            Action::UpDispatch(idx, sub) => {
+                state.navigate_up_dispatch(idx, sub, tg, cg);
             }
             Action::Complete(judgment) => {
                 print!("  Evidence (one line): ");
@@ -76,7 +82,9 @@ pub fn run(state: &mut TraversalState, tg: &TypeGraph, cg: &CallGraph) -> Result
 #[derive(Debug)]
 enum Action {
     Down(usize),
+    DownDispatch(usize, usize),
     Up(usize),
+    UpDispatch(usize, usize),
     Complete(Judgment),
     Discard,
     History,
@@ -105,11 +113,31 @@ fn parse_action(input: &str) -> Action {
     if input.starts_with('u') {
         let rest = input[1..].trim();
         let num: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
-        if let Ok(n) = num.parse::<usize>() { return Action::Up(n); }
+        if let Ok(n) = num.parse::<usize>() {
+            let after_num = &rest[num.len()..];
+            // Check for letter suffix: u1a, u2b, etc.
+            if let Some(ch) = after_num.chars().next() {
+                if ch.is_ascii_alphabetic() {
+                    let sub = (ch as u8 - b'a') as usize;
+                    return Action::UpDispatch(n, sub);
+                }
+            }
+            return Action::Up(n);
+        }
     }
 
+    // Check for digit+letter suffix: 5a, 3b, etc.
     let num: String = input.chars().take_while(|c| c.is_ascii_digit()).collect();
-    if let Ok(n) = num.parse::<usize>() { return Action::Down(n); }
+    if let Ok(n) = num.parse::<usize>() {
+        let after_num = &input[num.len()..].trim();
+        if let Some(ch) = after_num.chars().next() {
+            if ch.is_ascii_alphabetic() {
+                let sub = (ch as u8 - b'a') as usize;
+                return Action::DownDispatch(n, sub);
+            }
+        }
+        return Action::Down(n);
+    }
 
     Action::Unknown
 }

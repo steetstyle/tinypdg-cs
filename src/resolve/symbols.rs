@@ -197,6 +197,9 @@ impl SymbolTable {
                     new_ifaces.push(type_name.clone());
                 } else if self.type_graph.classes.contains_key(type_name) {
                     new_base = Some(type_name.clone());
+                } else {
+                    // Unknown base type — likely an external interface
+                    new_ifaces.push(type_name.clone());
                 }
             }
             if let Some(ci) = self.type_graph.classes.get_mut(&class_name) {
