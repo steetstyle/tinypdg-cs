@@ -324,6 +324,12 @@ pub fn handle_detect(path: &str) -> Result<()> {
     Ok(())
 }
 
+pub fn handle_route(path: &str) -> Result<()> {
+    let table = crate::route::extract(path)?;
+    println!("{}", serde_json::to_string_pretty(&table)?);
+    Ok(())
+}
+
 pub fn handle_traverse(path_str: &str, class: &str, context: Option<&str>) -> Result<()> {
     let path = Path::new(path_str);
     if !path.exists() {

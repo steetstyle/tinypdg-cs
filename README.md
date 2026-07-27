@@ -6,7 +6,7 @@ Made for LLM-driven root cause analysis on C# microservices. The idea is to buil
 
 ## What it does
 
-Nine CLI commands:
+Ten CLI commands:
 
 ```
 parse      -- AST + type graph as JSON
@@ -16,6 +16,7 @@ hammock    -- hammock block identification
 resolve    -- call resolution (DI, reflection, CHA, virtual dispatch)
 callgraph  -- focused call graph for a class, with dispatch tracing
 detect     -- design pattern detection (GoF 22 + .NET idioms)
+route      -- HTTP route extraction (Controllers + Minimal APIs)
 serve      -- HTTP server for tool integration
 ```
 
@@ -64,6 +65,7 @@ src/
   graph/          petgraph wrapper, DOT export
   cli/            command handlers
   analysis/       focused call graph analysis
+  route/          HTTP route extraction (Controller + Minimal API)
   main.rs         clap entry point
 ```
 
@@ -254,6 +256,24 @@ Top called methods:
   MapGet (12 calls)
 ```
 
+### Route extraction
+
+Extract HTTP routes from ASP.NET Controllers (`[Route]` + `[HttpGet]`, `[HttpPost]`, etc.) and Minimal APIs (`MapGet`, `MapPost`, etc.) across a project:
+
+```
+$ tinypdg-cs route patterns/
+{
+  "routes": [
+    { "http_method": "GET",  "path": "/{id}", "class": "UsersController", "handler": "GetUser",  "source": "Controller" },
+    { "http_method": "POST", "path": "/",      "class": "UsersController", "handler": "CreateUser", "source": "Controller" },
+    { "http_method": "PUT",  "path": "/{id}",  "class": "UsersController", "handler": "UpdateUser", "source": "Controller" },
+    { "http_method": "GET",  "path": "/items", "class": "Startup",        "handler": "GetAllItems", "source": "MinimalApi" }
+  ]
+}
+```
+
+Only classes named `*Controller` or inheriting `ControllerBase` are scanned for controller routes. Minimal API routes (`app.MapGet`, `MapPost`, `MapPut`, `MapDelete`, `MapPatch`) are extracted from `invocation_expression` nodes with handler name resolution via parent class context.
+
 ### Parse
 
 Dump the type graph as JSON for a single file:
@@ -278,7 +298,7 @@ $ tinypdg-cs parse src/Catalog.API/Infrastructure/CatalogContext.cs
 ## Tests
 
 ```
-cargo test        # 172 tests, unit + integration + fixtures
+cargo test        # 183 tests, unit + integration + fixtures
 cargo bench       # pdg benchmarks
 ```
 

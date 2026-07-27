@@ -67,6 +67,11 @@ enum Commands {
         #[arg(long, default_value = "8080")]
         port: u16,
     },
+    /// Extract HTTP routes from C# files (Controllers + Minimal APIs)
+    Route {
+        #[arg(help = "Path to .cs file or project directory")]
+        path: String,
+    },
     /// Interactive PRAXIS-style code traversal
     Traverse {
         #[arg(help = "Path to .cs file or project directory")]
@@ -109,6 +114,9 @@ fn main() {
         Commands::Serve { port } => {
             println!("serve on {}", port);
             Ok(())
+        }
+        Commands::Route { path } => {
+            tiny_pdg_cs::cli::commands::handle_route(&path)
         }
         Commands::Traverse { path, class, context } => {
             tiny_pdg_cs::cli::commands::handle_traverse(&path, &class, context.as_deref())
