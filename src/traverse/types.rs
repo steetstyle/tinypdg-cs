@@ -448,6 +448,11 @@ pub fn resolve_up(cg: &CallGraph, tg: &TypeGraph, node: &NodeRef) -> (Vec<NavEnt
         return (delegate_up, dispatch);
     }
 
+    let iface_name = matching_ifaces[0].clone();
+    let impls: Vec<(String, f64)> = find_implementors(tg, &iface_name)
+        .iter().filter(|c| c.name != node.class)
+        .map(|c| (c.name.clone(), 0.95)).collect();
+
     // Search for callers through the interface (callee_class = interface name)
     // Also include calls with empty callee_class — these are often calls through
     // interface-typed variables (e.g., `IInterface x = ...; x.Method()`)
@@ -460,45 +465,23 @@ pub fn resolve_up(cg: &CallGraph, tg: &TypeGraph, node: &NodeRef) -> (Vec<NavEnt
         .collect();
 
     if !iface_calls.is_empty() {
-        let mut up = Vec::new();
-        let mut idx = 0;
-        let mut seen: HashMap<String, Vec<&CallSite>> = HashMap::new();
-        for c in iface_calls {
-            seen.entry(c.caller_class.clone()).or_default().push(c);
-        }
-        let mut sorted: Vec<_> = seen.into_iter().collect();
-        sorted.sort_by(|a, b| a.0.cmp(&b.0));
-        let iface_name = matching_ifaces[0].clone();
-        let impls: Vec<(String, f64)> = find_implementors(tg, &iface_name)
-            .iter().filter(|c| c.name != node.class)
-            .map(|c| (c.name.clone(), 0.95)).collect();
-        for (caller_class, sites) in sorted {
-            idx += 1;
-            let first = sites[0];
-            let target = NodeRef { class: caller_class.clone(), method: first.caller_method.clone() };
-            up.push(NavEntry {
-                idx,
-                callee: first.callee.clone(),
-                via: first.caller_method.clone(),
-                target,
-                kind: EdgeKind::Interface { interface: iface_name.clone(), implementations: impls.clone() },
-                line: None,
-                context: None,
-            });
-        }
-        let base = up.len();
-        for (i, mut entry) in delegate_up.into_iter().enumerate() {
-            entry.idx = base + i + 1;
-            up.push(entry);
-        }
-        return (up, dispatch);
+        return (build_iface_up(iface_calls, &iface_name, &impls, delegate_up), dispatch);
+    }
+
+    // Broader fallback: any call with matching callee name and empty callee_class
+    let broad_calls: Vec<&CallSite> = cg.calls.iter()
+        .filter(|c| {
+            c.callee == node.method
+                && c.callee_class.is_empty()
+                && c.caller_class != node.class
+        })
+        .collect();
+
+    if !broad_calls.is_empty() {
+        return (build_iface_up(broad_calls, &iface_name, &impls, delegate_up), dispatch);
     }
 
     // No callers through interface — create a synthetic entry pointing to the interface
-    let iface_name = matching_ifaces[0].clone();
-    let impls: Vec<(String, f64)> = find_implementors(tg, &iface_name)
-        .iter().filter(|c| c.name != node.class)
-        .map(|c| (c.name.clone(), 0.95)).collect();
     let up = vec![NavEntry {
         idx: 1,
         callee: node.method.clone(),
@@ -516,6 +499,37 @@ pub fn resolve_up(cg: &CallGraph, tg: &TypeGraph, node: &NodeRef) -> (Vec<NavEnt
     }
 
     (result, dispatch)
+}
+
+fn build_iface_up(calls: Vec<&CallSite>, iface_name: &str, impls: &[(String, f64)], delegate_up: Vec<NavEntry>) -> Vec<NavEntry> {
+    let mut up = Vec::new();
+    let mut idx = 0;
+    let mut seen: HashMap<String, Vec<&CallSite>> = HashMap::new();
+    for c in calls {
+        seen.entry(c.caller_class.clone()).or_default().push(c);
+    }
+    let mut sorted: Vec<_> = seen.into_iter().collect();
+    sorted.sort_by(|a, b| a.0.cmp(&b.0));
+    for (caller_class, sites) in sorted {
+        idx += 1;
+        let first = sites[0];
+        let target = NodeRef { class: caller_class.clone(), method: first.caller_method.clone() };
+        up.push(NavEntry {
+            idx,
+            callee: first.callee.clone(),
+            via: first.caller_method.clone(),
+            target,
+            kind: EdgeKind::Interface { interface: iface_name.to_string(), implementations: impls.to_vec() },
+            line: None,
+            context: None,
+        });
+    }
+    let base = up.len();
+    for (i, mut entry) in delegate_up.into_iter().enumerate() {
+        entry.idx = base + i + 1;
+        up.push(entry);
+    }
+    up
 }
 
 fn find_matching_interfaces<'a>(tg: &'a TypeGraph, node: &NodeRef) -> Vec<&'a String> {
@@ -1092,6 +1106,18 @@ class EventBusService { public void PublishThroughBus(OrderIntegrationEvent evt)
         let (up, dispatch) = resolve_up(&cg, &tg, &node);
         assert!(up.is_empty());
         assert!(dispatch.is_empty());
+    }
+
+    #[test]
+    fn test_resolve_up_impl_called_through_interface() {
+        // Class C implements I with method M. Class D calls I.M() via interface-typed variable.
+        // resolve_up for C.M should find D as a caller through the interface dispatch.
+        let src = "interface I { void M(); } class C : I { public void M() {} } class D { void Caller() { I x = null; x.M(); } }";
+        let (tg, cg) = build_tg_and_cg(src);
+        let node = NodeRef { class: "C".into(), method: "M".into() };
+        let (up, _dispatch) = resolve_up(&cg, &tg, &node);
+        assert!(up.iter().any(|e| e.target.class == "D"),
+            "C.M should find D as caller through interface I.M; up: {:?}", up);
     }
 
     #[test]
