@@ -243,6 +243,8 @@ fn detect_observer(ctx: &DetectionContext, results: &mut Vec<PatternMatch>) {
 fn detect_mediator(ctx: &DetectionContext, results: &mut Vec<PatternMatch>) {
     // Mediator: interface with >=2 methods, exactly 1 concrete implementor,
     // and other non-implementing classes with action methods (components).
+    // The implementor must call methods on component classes (verified via callgraph);
+    // without this check, facades and pure delegates are misclassified as Mediator.
     for (iface_name, iface) in &ctx.type_graph.interfaces {
         let methods: Vec<_> = iface.methods.iter()
             .filter(|m| !m.method.starts_with("get_") && !m.method.starts_with("set_"))
@@ -255,6 +257,23 @@ fn detect_mediator(ctx: &DetectionContext, results: &mut Vec<PatternMatch>) {
             .filter(|c| !c.is_abstract && c.interfaces.iter().any(|i| i == iface_name))
             .collect();
         if implementors.len() != 1 { continue; }
+        let implementor = implementors[0];
+
+        // Graph check: the implementor must call methods on component
+        // (non-implementor) classes. A Facade or pure delegate wraps
+        // logic but doesn't coordinate between components.
+        if let Some(cg) = ctx.callgraph {
+            let calls_components = cg.calls.iter().any(|c| {
+                c.caller_class == implementor.name
+                    && !c.callee_class.is_empty()
+                    && c.callee_class != implementor.name
+                    && !implementor.interfaces.iter().any(|i| c.callee_class == *i)
+                    && !ctx.type_graph.interfaces.contains_key(&c.callee_class)
+            });
+            if !calls_components {
+                continue;
+            }
+        }
 
         // There must be other classes that don't implement the interface
         // but have "component" behavior (non-accessor methods)
@@ -286,61 +305,119 @@ fn detect_mediator(ctx: &DetectionContext, results: &mut Vec<PatternMatch>) {
 }
 
 fn detect_dotnet_mediator(ctx: &DetectionContext, results: &mut Vec<PatternMatch>) {
-    // .NET MediatR: IMediator-like interface (>=2 methods, 1 implementor)
-    // paired with separate handler interfaces (1 method, >=2 implementors each).
-    // The mediator implementor does NOT implement handler interfaces.
-    for (iface_name, iface) in &ctx.type_graph.interfaces {
+    // Graph-based structural detection: uses class→interface references and
+    // callgraph edges, NOT naming conventions or source-defined interfaces.
+
+    // A: Handler classes — any class whose interface list contains a "Handler"
+    // name (IRequestHandler, INotificationHandler, etc.) AND has a Handle method.
+    let handler_classes: Vec<_> = ctx.type_graph.classes.values()
+        .filter(|c| {
+            if c.is_abstract { return false; }
+            let has_handler_iface = c.interfaces.iter()
+                .any(|i| i.contains("Handler"));
+            if !has_handler_iface { return false; }
+            c.methods.iter().any(|m| m.method == "Handle")
+        })
+        .collect();
+
+    // B: Pipeline behaviors — classes implementing a "Behavior" interface
+    // (IPipelineBehavior) with a Handle method.
+    let behavior_classes: Vec<_> = ctx.type_graph.classes.values()
+        .filter(|c| {
+            if c.is_abstract { return false; }
+            let has_behavior_iface = c.interfaces.iter()
+                .any(|i| i.contains("Behavior"));
+            if !has_behavior_iface { return false; }
+            c.methods.iter().any(|m| m.method == "Handle")
+        })
+        .collect();
+
+    // C: Dispatch calls (Send/Publish) from callgraph
+    let dispatch_count = ctx.callgraph
+        .map(|cg| cg.calls.iter()
+            .filter(|c| c.callee == "Send" || c.callee == "Publish")
+            .count())
+        .unwrap_or(0);
+
+    // D: AddMediatR registration from callgraph
+    let has_mediatr_reg = ctx.callgraph
+        .map(|cg| cg.calls.iter().any(|c| c.callee == "AddMediatR"))
+        .unwrap_or(false);
+
+    // E: Source-defined IMediator-like interface (old path, works for
+    // self-contained fixtures that define these interfaces inline).
+    let source_mediator = ctx.type_graph.interfaces.iter().find(|(name, iface)| {
         let methods: Vec<_> = iface.methods.iter()
             .filter(|m| !m.method.starts_with("get_") && !m.method.starts_with("set_"))
             .collect();
-        if methods.len() < 2 { continue; }
+        if methods.len() < 2 { return false; }
+        let impl_count = ctx.type_graph.classes.values()
+            .filter(|c| !c.is_abstract && c.interfaces.iter().any(|i| i == *name))
+            .count();
+        impl_count == 1
+    });
 
-        let mediator_impls: Vec<_> = ctx.type_graph.classes.values()
-            .filter(|c| !c.is_abstract && c.interfaces.iter().any(|i| i == iface_name))
-            .collect();
-        if mediator_impls.len() != 1 { continue; }
-        let mediator_class = mediator_impls[0];
+    // ---- DECISION ----
 
-        // Find handler interfaces: single method, >=2 implementors,
-        // and mediator implementor does NOT implement them
+    // Path 1: source-defined IMediator + handler interfaces (fixture case)
+    if let Some((med_name, _)) = source_mediator {
         let handler_ifaces: Vec<_> = ctx.type_graph.interfaces.iter()
             .filter(|(h_name, h_iface)| {
-                if *h_name == iface_name { return false; }
+                if *h_name == med_name { return false; }
                 let h_methods: Vec<_> = h_iface.methods.iter()
                     .filter(|m| !m.method.starts_with("get_") && !m.method.starts_with("set_"))
                     .collect();
                 if h_methods.len() != 1 { return false; }
-
                 let h_impls: Vec<_> = ctx.type_graph.classes.values()
                     .filter(|c| !c.is_abstract && c.interfaces.iter().any(|i| i == *h_name))
                     .collect();
                 if h_impls.len() < 2 { return false; }
-
-                // Mediator class must NOT implement this handler interface
-                if mediator_class.interfaces.iter().any(|i| i == *h_name) {
-                    return false;
-                }
-
-                true
+                let mediator_class = ctx.type_graph.classes.values()
+                    .find(|c| !c.is_abstract && c.interfaces.iter().any(|i| i == med_name));
+                mediator_class.map_or(true, |mc| !mc.interfaces.iter().any(|i| i == *h_name))
             })
             .collect();
+        if handler_ifaces.len() >= 2 {
+            results.push(PatternMatch {
+                pattern: PatternKind::DotnetMediator,
+                class: med_name.clone(),
+                description: format!(
+                    "'{}' dispatches to {} handler interfaces — .NET MediatR",
+                    med_name, handler_ifaces.len()
+                ),
+                confidence: 0.85,
+                participants: {
+                    let mut p = vec![med_name.clone()];
+                    p.extend(handler_ifaces.iter().map(|(n, _)| (*n).clone()));
+                    p
+                },
+                evidence: handler_ifaces.iter().map(|(n, _)| (*n).clone()).collect(),
+            });
+            return;
+        }
+    }
 
-        if handler_ifaces.len() < 2 { continue; }
-
+    // Path 2: graph-based structural detection (real projects like eShop)
+    // Requires at least 2 handler classes AND dispatch calls (Send/Publish).
+    if handler_classes.len() >= 2 && dispatch_count >= 1 {
+        let conf = if has_mediatr_reg || behavior_classes.len() >= 1 { 0.85 } else { 0.70 };
         results.push(PatternMatch {
             pattern: PatternKind::DotnetMediator,
-            class: iface_name.clone(),
+            class: "MediatR".to_string(),
             description: format!(
-                "'{}' dispatches to {} handler interfaces — .NET MediatR",
-                iface_name, handler_ifaces.len()
+                "{} handler(s), {} dispatch call(s), {} behavior(s) — .NET MediatR",
+                handler_classes.len(), dispatch_count, behavior_classes.len()
             ),
-            confidence: 0.85,
-            participants: {
-                let mut p = vec![iface_name.clone()];
-                p.extend(handler_ifaces.iter().map(|(n, _)| (*n).clone()));
-                p
-            },
-            evidence: handler_ifaces.iter().map(|(n, _)| (*n).clone()).collect(),
+            confidence: conf,
+            participants: handler_classes.iter().map(|c| c.name.clone()).collect(),
+            evidence: vec![
+                format!("{} handler classes", handler_classes.len()),
+                format!("{} dispatch calls (Send/Publish)", dispatch_count),
+                if !behavior_classes.is_empty() {
+                    format!("{} pipeline behaviors", behavior_classes.len())
+                } else { String::new() },
+                if has_mediatr_reg { "AddMediatR registered".to_string() } else { String::new() },
+            ].into_iter().filter(|s| !s.is_empty()).collect(),
         });
     }
 }
