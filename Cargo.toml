@@ -19,8 +19,13 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # MCP server (`tiny-pdg-cs serve`). Gated so the library stays usable without a
 # tokio runtime or an MCP stack; every MCP tool is also available via the CLI.
+# `server` + `transport-io` give stdio; `transport-streamable-http-server` adds
+# Streamable HTTP. The standalone SSE transport is deprecated in the MCP spec and
+# the SDK ships no server for it, so there is nothing to enable here.
 rmcp = { version = "3", features = ["server", "transport-io"], optional = true }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std"], optional = true }
+# Serving the Streamable HTTP tower service needs an HTTP server to host it.
+axum = { version = "0.8", optional = true }
 # Tool parameter schemas. Must match the version rmcp re-exports (1.x for
 # rmcp 3.5) — pinning 0.8 here makes the derive produce a different crate's
 # trait and the tool bounds never resolve.
@@ -29,11 +34,15 @@ schemars = { version = "1", optional = true }
 [features]
 default = []
 mcp = ["dep:rmcp", "dep:tokio", "dep:schemars"]
+mcp-http = ["mcp", "rmcp/transport-streamable-http-server", "dep:axum"]
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
 insta = "1"
 pretty_assertions = "1"
+# The HTTP test drives the server with the official SDK client as well as by
+# hand, so the client transport must be available to the test build.
+rmcp = { version = "3", features = ["client", "transport-streamable-http-client-reqwest"] }
 
 [[bench]]
 name = "bench_pdg"

@@ -68,13 +68,19 @@ enum Commands {
         #[arg(help = "Path to .cs file or project directory")]
         path: String,
     },
-    /// Serve static code analysis over MCP (stdio) for AI agents
+    /// Serve static code analysis over MCP for AI agents
     Serve {
-        /// Serve over streamable HTTP on this port instead of stdio
+        /// Serve over Streamable HTTP instead of stdio
         #[arg(long)]
         http: bool,
+        /// Bind address for --http (loopback by default; no authentication)
+        #[arg(long, default_value = "127.0.0.1")]
+        bind: std::net::IpAddr,
         #[arg(long, default_value = "8080")]
         port: u16,
+        /// Endpoint path for --http
+        #[arg(long, default_value = "mcp")]
+        path: String,
     },
     /// Extract HTTP routes from C# files (Controllers + Minimal APIs)
     Route {
@@ -150,7 +156,12 @@ fn main() {
             inbound,
             trace,
         ),
-        Commands::Serve { http, port } => serve(http, port),
+        Commands::Serve {
+            http,
+            bind,
+            port,
+            path,
+        } => serve(http, bind, port, path),
         Commands::Route { path, json } => tiny_pdg_cs::cli::commands::handle_route(&path, json),
         Commands::Traverse {
             path,
@@ -176,25 +187,37 @@ fn main() {
     }
 }
 
-/// Run the MCP server. Stdio by default, which is what MCP clients launch;
-/// `--http` is for inspection and local testing.
+/// Run the MCP server.
+///
+/// Stdio by default, which is what MCP clients launch. `--http` serves Streamable
+/// HTTP instead, for shared or remote deployments.
 #[cfg(feature = "mcp")]
-fn serve(http: bool, port: u16) -> anyhow::Result<()> {
+fn serve(http: bool, bind: std::net::IpAddr, port: u16, path: String) -> anyhow::Result<()> {
+    if http {
+        return serve_http(bind, port, path);
+    }
+    serve_stdio()
+}
+
+#[cfg(all(feature = "mcp", not(feature = "mcp-http")))]
+fn serve_http(_bind: std::net::IpAddr, _port: u16, _path: String) -> anyhow::Result<()> {
+    anyhow::bail!(
+        "`serve --http` requires the `mcp-http` feature: \
+         cargo build --features mcp-http"
+    )
+}
+
+#[cfg(feature = "mcp-http")]
+fn serve_http(bind: std::net::IpAddr, port: u16, path: String) -> anyhow::Result<()> {
+    tiny_pdg_cs::mcp::http::serve_http(tiny_pdg_cs::mcp::http::HttpArgs { bind, port, path })
+}
+
+#[cfg(feature = "mcp")]
+fn serve_stdio() -> anyhow::Result<()> {
     use rmcp::transport::stdio;
     use rmcp::ServiceExt;
 
     let server = tiny_pdg_cs::mcp::AnalysisServer::new();
-
-    if http {
-        // Streamable HTTP is not wired up; stdio is the supported transport.
-        // Fail loudly rather than starting something that cannot be reached.
-        anyhow::bail!(
-            "HTTP transport is not implemented yet (requested port {}). \
-             Run without --http to serve over stdio.",
-            port
-        );
-    }
-
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
@@ -208,6 +231,6 @@ fn serve(http: bool, port: u16) -> anyhow::Result<()> {
 /// The `mcp` feature is required for `serve`; keep the other commands usable
 /// without it.
 #[cfg(not(feature = "mcp"))]
-fn serve(_http: bool, _port: u16) -> anyhow::Result<()> {
+fn serve(_http: bool, _bind: std::net::IpAddr, _port: u16, _path: String) -> anyhow::Result<()> {
     anyhow::bail!("`serve` requires the `mcp` feature: cargo build --features mcp")
 }

@@ -7,6 +7,8 @@
 //! Start with `tiny-pdg-cs serve`, then connect an MCP client over stdio.
 
 pub mod cache;
+#[cfg(feature = "mcp-http")]
+pub mod http;
 pub mod tools;
 
 use rmcp::{
