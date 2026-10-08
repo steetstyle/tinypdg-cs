@@ -7,7 +7,7 @@ use crate::cfg::builder::{BasicBlock, BlockEdge, BlockKind};
 use crate::pdg::control_deps::compute_control_deps;
 use crate::pdg::data_deps::compute_data_deps;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub enum PdgEdge {
     Control,
     Data,
@@ -28,10 +28,12 @@ pub type PdgGraph = DiGraph<BasicBlock, PdgEdge>;
 
 /// CFG + control dependence + data dependence → PDG
 pub fn build_pdg(cfg: &DiGraph<BasicBlock, BlockEdge>) -> Result<PdgGraph> {
-    let entry = cfg.node_indices()
+    let entry = cfg
+        .node_indices()
         .find(|i| cfg[*i].kind == BlockKind::Entry)
         .expect("CFG must have an Entry node");
-    let exit = cfg.node_indices()
+    let exit = cfg
+        .node_indices()
         .find(|i| cfg[*i].kind == BlockKind::Exit)
         .expect("CFG must have an Exit node");
 
@@ -83,16 +85,22 @@ mod tests {
 
     #[test]
     fn test_if_pdg() {
-        let cfg = build_cfg("class C { void M() { if (true) { foo(); } else { bar(); } } }").unwrap();
+        let cfg =
+            build_cfg("class C { void M() { if (true) { foo(); } else { bar(); } } }").unwrap();
         let pdg = build_pdg(&cfg).unwrap();
         assert!(pdg.edge_count() >= cfg.edge_count());
     }
 
     #[test]
     fn test_pdg_has_control_edges() {
-        let cfg = build_cfg("class C { void M() { if (true) { foo(); } else { bar(); } } }").unwrap();
+        let cfg =
+            build_cfg("class C { void M() { if (true) { foo(); } else { bar(); } } }").unwrap();
         let pdg = build_pdg(&cfg).unwrap();
-        let control_edges = pdg.raw_edges().iter().filter(|e| e.weight == PdgEdge::Control).count();
+        let control_edges = pdg
+            .raw_edges()
+            .iter()
+            .filter(|e| e.weight == PdgEdge::Control)
+            .count();
         assert!(control_edges > 0);
     }
 }

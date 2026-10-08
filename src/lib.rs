@@ -1,16 +1,19 @@
-pub mod parse;
+pub mod analysis;
 pub mod cfg;
-pub mod pdg;
-pub mod hammock;
-pub mod resolve;
+pub mod cli;
 pub mod detect;
 pub mod graph;
-pub mod cli;
-pub mod analysis;
-pub mod traverse;
+pub mod hammock;
+pub mod parse;
+pub mod pdg;
+pub mod resolve;
 pub mod route;
+pub mod traverse;
 
-pub use parse::parser;
+#[cfg(feature = "mcp")]
+pub mod mcp;
+
 pub use cfg::builder as cfg_builder;
-pub use pdg::pdg_builder;
 pub use graph::dot;
+pub use parse::parser;
+pub use pdg::pdg_builder;

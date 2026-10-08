@@ -1,7 +1,10 @@
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(name = "tiny-pdg-cs", about = "C# Program Dependence Graph (PDG) builder")]
+#[command(
+    name = "tiny-pdg-cs",
+    about = "C# Program Dependence Graph (PDG) builder"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -54,7 +57,10 @@ enum Commands {
         outbound: bool,
         #[arg(long, help = "Show only inbound calls to class")]
         inbound: bool,
-        #[arg(long, help = "Trace dispatch: show possible implementations and their call graphs")]
+        #[arg(
+            long,
+            help = "Trace dispatch: show possible implementations and their call graphs"
+        )]
         trace: bool,
     },
     /// Detect design patterns in C# source code
@@ -62,8 +68,11 @@ enum Commands {
         #[arg(help = "Path to .cs file or project directory")]
         path: String,
     },
-    /// Start HTTP server for PRAXIS integration
+    /// Serve static code analysis over MCP (stdio) for AI agents
     Serve {
+        /// Serve over streamable HTTP on this port instead of stdio
+        #[arg(long)]
+        http: bool,
         #[arg(long, default_value = "8080")]
         port: u16,
     },
@@ -112,9 +121,7 @@ fn main() {
 
     let cli = Cli::parse();
     let result = match cli.command {
-        Commands::Parse { file } => {
-            tiny_pdg_cs::cli::commands::handle_parse(&file)
-        }
+        Commands::Parse { file } => tiny_pdg_cs::cli::commands::handle_parse(&file),
         Commands::Cfg { file, format } => {
             tiny_pdg_cs::cli::commands::handle_cfg(&file, format.as_deref())
         }
@@ -127,32 +134,80 @@ fn main() {
         Commands::Resolve { path, kind } => {
             tiny_pdg_cs::cli::commands::handle_resolve(&path, kind.as_deref())
         }
-        Commands::Detect { path } => {
-            tiny_pdg_cs::cli::commands::handle_detect(&path)
-        }
-        Commands::Callgraph { path, class, depth, outbound, inbound, trace } => {
-            tiny_pdg_cs::cli::commands::handle_callgraph(&path, class.as_deref(), depth, outbound, inbound, trace)
-        }
-        Commands::Serve { port } => {
-            println!("serve on {}", port);
-            Ok(())
-        }
-        Commands::Route { path, json } => {
-            tiny_pdg_cs::cli::commands::handle_route(&path, json)
-        }
-        Commands::Traverse { path, class, context } => {
-            tiny_pdg_cs::cli::commands::handle_traverse(&path, &class, context.as_deref())
-        }
-        Commands::Impact { path, class, method } => {
-            tiny_pdg_cs::cli::commands::handle_impact(&path, &class, &method)
-        }
-        Commands::Diffimpact { v1, v2, class, method } => {
-            tiny_pdg_cs::cli::commands::handle_diffimpact(&v1, &v2, &class, &method)
-        }
+        Commands::Detect { path } => tiny_pdg_cs::cli::commands::handle_detect(&path),
+        Commands::Callgraph {
+            path,
+            class,
+            depth,
+            outbound,
+            inbound,
+            trace,
+        } => tiny_pdg_cs::cli::commands::handle_callgraph(
+            &path,
+            class.as_deref(),
+            depth,
+            outbound,
+            inbound,
+            trace,
+        ),
+        Commands::Serve { http, port } => serve(http, port),
+        Commands::Route { path, json } => tiny_pdg_cs::cli::commands::handle_route(&path, json),
+        Commands::Traverse {
+            path,
+            class,
+            context,
+        } => tiny_pdg_cs::cli::commands::handle_traverse(&path, &class, context.as_deref()),
+        Commands::Impact {
+            path,
+            class,
+            method,
+        } => tiny_pdg_cs::cli::commands::handle_impact(&path, &class, &method),
+        Commands::Diffimpact {
+            v1,
+            v2,
+            class,
+            method,
+        } => tiny_pdg_cs::cli::commands::handle_diffimpact(&v1, &v2, &class, &method),
     };
 
     if let Err(e) = result {
         eprintln!("Error: {}", e);
         std::process::exit(1);
     }
+}
+
+/// Run the MCP server. Stdio by default, which is what MCP clients launch;
+/// `--http` is for inspection and local testing.
+#[cfg(feature = "mcp")]
+fn serve(http: bool, port: u16) -> anyhow::Result<()> {
+    use rmcp::transport::stdio;
+    use rmcp::ServiceExt;
+
+    let server = tiny_pdg_cs::mcp::AnalysisServer::new();
+
+    if http {
+        // Streamable HTTP is not wired up; stdio is the supported transport.
+        // Fail loudly rather than starting something that cannot be reached.
+        anyhow::bail!(
+            "HTTP transport is not implemented yet (requested port {}). \
+             Run without --http to serve over stdio.",
+            port
+        );
+    }
+
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+    rt.block_on(async move {
+        let service = server.serve(stdio()).await?;
+        service.waiting().await?;
+        Ok::<(), anyhow::Error>(())
+    })
+}
+
+/// The `mcp` feature is required for `serve`; keep the other commands usable
+/// without it.
+#[cfg(not(feature = "mcp"))]
+fn serve(_http: bool, _port: u16) -> anyhow::Result<()> {
+    anyhow::bail!("`serve` requires the `mcp` feature: cargo build --features mcp")
 }

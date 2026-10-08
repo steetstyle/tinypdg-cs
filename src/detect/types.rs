@@ -1,53 +1,81 @@
+use std::collections::HashMap;
 use std::fmt;
 
 use crate::analysis::callgraph::CallGraph;
 use crate::resolve::types::TypeGraph;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize)]
 pub enum PatternKind {
-    Singleton, FactoryMethod, AbstractFactory, Builder, Prototype,
-    Adapter, Decorator, Proxy, Composite, Facade, Bridge, Flyweight,
-    Strategy, Observer, Command, Mediator, ChainOfResponsibility, State,
-    TemplateMethod, Visitor, Iterator, Memento, Interpreter, Handler,
-    DotnetMediator, ControllerApi, MinimalApi, DiContainer,
+    Singleton,
+    FactoryMethod,
+    AbstractFactory,
+    Builder,
+    Prototype,
+    Adapter,
+    Decorator,
+    Proxy,
+    Composite,
+    Facade,
+    Bridge,
+    Flyweight,
+    Strategy,
+    Observer,
+    Command,
+    Mediator,
+    ChainOfResponsibility,
+    State,
+    TemplateMethod,
+    Visitor,
+    Iterator,
+    Memento,
+    Interpreter,
+    Handler,
+    DotnetMediator,
+    ControllerApi,
+    MinimalApi,
+    DiContainer,
 }
 
 impl fmt::Display for PatternKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", match self {
-            PatternKind::Singleton => "Singleton",
-            PatternKind::FactoryMethod => "FactoryMethod",
-            PatternKind::AbstractFactory => "AbstractFactory",
-            PatternKind::Builder => "Builder",
-            PatternKind::Prototype => "Prototype",
-            PatternKind::Adapter => "Adapter",
-            PatternKind::Decorator => "Decorator",
-            PatternKind::Proxy => "Proxy",
-            PatternKind::Composite => "Composite",
-            PatternKind::Facade => "Facade",
-            PatternKind::Bridge => "Bridge",
-            PatternKind::Flyweight => "Flyweight",
-            PatternKind::Strategy => "Strategy",
-            PatternKind::Observer => "Observer",
-            PatternKind::Command => "Command",
-            PatternKind::Mediator => "Mediator",
-            PatternKind::ChainOfResponsibility => "ChainOfResponsibility",
-            PatternKind::State => "State",
-            PatternKind::TemplateMethod => "TemplateMethod",
-            PatternKind::Visitor => "Visitor",
-            PatternKind::Iterator => "Iterator",
-            PatternKind::Memento => "Memento",
-            PatternKind::Interpreter => "Interpreter",
-            PatternKind::Handler => "Handler",
-            PatternKind::DotnetMediator => "DotnetMediator",
-            PatternKind::ControllerApi => "ControllerApi",
-            PatternKind::MinimalApi => "MinimalApi",
-            PatternKind::DiContainer => "DiContainer",
-        })
+        write!(
+            f,
+            "{}",
+            match self {
+                PatternKind::Singleton => "Singleton",
+                PatternKind::FactoryMethod => "FactoryMethod",
+                PatternKind::AbstractFactory => "AbstractFactory",
+                PatternKind::Builder => "Builder",
+                PatternKind::Prototype => "Prototype",
+                PatternKind::Adapter => "Adapter",
+                PatternKind::Decorator => "Decorator",
+                PatternKind::Proxy => "Proxy",
+                PatternKind::Composite => "Composite",
+                PatternKind::Facade => "Facade",
+                PatternKind::Bridge => "Bridge",
+                PatternKind::Flyweight => "Flyweight",
+                PatternKind::Strategy => "Strategy",
+                PatternKind::Observer => "Observer",
+                PatternKind::Command => "Command",
+                PatternKind::Mediator => "Mediator",
+                PatternKind::ChainOfResponsibility => "ChainOfResponsibility",
+                PatternKind::State => "State",
+                PatternKind::TemplateMethod => "TemplateMethod",
+                PatternKind::Visitor => "Visitor",
+                PatternKind::Iterator => "Iterator",
+                PatternKind::Memento => "Memento",
+                PatternKind::Interpreter => "Interpreter",
+                PatternKind::Handler => "Handler",
+                PatternKind::DotnetMediator => "DotnetMediator",
+                PatternKind::ControllerApi => "ControllerApi",
+                PatternKind::MinimalApi => "MinimalApi",
+                PatternKind::DiContainer => "DiContainer",
+            }
+        )
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct PatternMatch {
     pub pattern: PatternKind,
     pub class: String,
@@ -61,15 +89,44 @@ pub struct DetectionContext<'a> {
     pub type_graph: &'a TypeGraph,
     pub callgraph: Option<&'a CallGraph>,
     pub source: &'a str,
+    pub sources: Option<&'a HashMap<String, String>>,
 }
 
 impl<'a> DetectionContext<'a> {
     pub fn new(type_graph: &'a TypeGraph, source: &'a str) -> Self {
-        DetectionContext { type_graph, callgraph: None, source }
+        DetectionContext {
+            type_graph,
+            callgraph: None,
+            source,
+            sources: None,
+        }
     }
 
-    pub fn with_callgraph(type_graph: &'a TypeGraph, callgraph: &'a CallGraph, source: &'a str) -> Self {
-        DetectionContext { type_graph, callgraph: Some(callgraph), source }
+    pub fn with_callgraph(
+        type_graph: &'a TypeGraph,
+        callgraph: &'a CallGraph,
+        source: &'a str,
+    ) -> Self {
+        DetectionContext {
+            type_graph,
+            callgraph: Some(callgraph),
+            source,
+            sources: None,
+        }
+    }
+
+    pub fn with_sources(
+        type_graph: &'a TypeGraph,
+        callgraph: &'a CallGraph,
+        source: &'a str,
+        sources: &'a HashMap<String, String>,
+    ) -> Self {
+        DetectionContext {
+            type_graph,
+            callgraph: Some(callgraph),
+            source,
+            sources: Some(sources),
+        }
     }
 }
 

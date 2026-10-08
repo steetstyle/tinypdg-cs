@@ -772,10 +772,16 @@ pub fn load_project(path: &Path) -> Result<(TypeGraph, CallGraph)> {
         }
     }
 
-    println!("Parsed {} file(s)", all_cs_files.len());
-    println!("Classes: {}, Interfaces: {}, Call sites: {}",
-        type_graph.classes.len(), type_graph.interfaces.len(), cg.calls.len());
-    println!();
+    // Diagnostics go to the tracing log, not stdout. This function is library
+    // code called by the MCP server, where stdout carries the JSON-RPC stream —
+    // printing here corrupted the protocol.
+    tracing::debug!(
+        files = all_cs_files.len(),
+        classes = type_graph.classes.len(),
+        interfaces = type_graph.interfaces.len(),
+        call_sites = cg.calls.len(),
+        "parsed project"
+    );
 
     Ok((type_graph, cg))
 }

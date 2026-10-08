@@ -17,6 +17,19 @@ thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
+# MCP server (`tiny-pdg-cs serve`). Gated so the library stays usable without a
+# tokio runtime or an MCP stack; every MCP tool is also available via the CLI.
+rmcp = { version = "3", features = ["server", "transport-io"], optional = true }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std"], optional = true }
+# Tool parameter schemas. Must match the version rmcp re-exports (1.x for
+# rmcp 3.5) — pinning 0.8 here makes the derive produce a different crate's
+# trait and the tool bounds never resolve.
+schemars = { version = "1", optional = true }
+
+[features]
+default = []
+mcp = ["dep:rmcp", "dep:tokio", "dep:schemars"]
+
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
 insta = "1"

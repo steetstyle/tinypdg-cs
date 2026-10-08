@@ -9,7 +9,7 @@ use crate::parse::parser::parse_source;
 
 pub type CfgGraph = DiGraph<BasicBlock, BlockEdge>;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct BasicBlock {
     pub id: usize,
     pub start_line: usize,
@@ -19,11 +19,15 @@ pub struct BasicBlock {
 
 impl fmt::Display for BasicBlock {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "[{}] {:?} (L{}-L{})", self.id, self.kind, self.start_line, self.end_line)
+        write!(
+            f,
+            "[{}] {:?} (L{}-L{})",
+            self.id, self.kind, self.start_line, self.end_line
+        )
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub enum BlockKind {
     Entry,
     Exit,
@@ -46,7 +50,7 @@ impl fmt::Display for BlockKind {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub enum BlockEdge {
     Seq,
     CondTrue,
@@ -72,14 +76,21 @@ struct CfgCtx {
 
 impl CfgCtx {
     fn new() -> Self {
-        Self { graph: DiGraph::new() }
+        Self {
+            graph: DiGraph::new(),
+        }
     }
 
     fn add_block(&mut self, kind: BlockKind, node: &Node) -> NodeIndex {
         let id = self.graph.node_count();
         let start = node.start_position().row + 1;
         let end = node.end_position().row + 1;
-        self.graph.add_node(BasicBlock { id, start_line: start, end_line: end, kind })
+        self.graph.add_node(BasicBlock {
+            id,
+            start_line: start,
+            end_line: end,
+            kind,
+        })
     }
 
     fn add_edge(&mut self, from: NodeIndex, to: NodeIndex, kind: BlockEdge) {
@@ -168,14 +179,22 @@ fn build_block(ctx: &mut CfgCtx, block_node: &Node) -> Option<BlockRange> {
         }
     }
 
-    first.map(|f| BlockRange { first: f, last: last.unwrap() })
+    first.map(|f| BlockRange {
+        first: f,
+        last: last.unwrap(),
+    })
 }
 
 fn build_stmt(ctx: &mut CfgCtx, stmt: &Node) -> Option<BlockRange> {
     match stmt.kind() {
-        "expression_statement" | "local_declaration_statement" | "fixed_statement"
-        | "checked_statement" | "unchecked_statement" | "unsafe_statement"
-        | "using_statement" | "lock_statement" => {
+        "expression_statement"
+        | "local_declaration_statement"
+        | "fixed_statement"
+        | "checked_statement"
+        | "unchecked_statement"
+        | "unsafe_statement"
+        | "using_statement"
+        | "lock_statement" => {
             let n = ctx.add_block(BlockKind::Statement, stmt);
             Some(BlockRange { first: n, last: n })
         }
@@ -243,7 +262,10 @@ fn build_if(ctx: &mut CfgCtx, if_node: &Node) -> Option<BlockRange> {
         ctx.add_edge(cond, merge, BlockEdge::CondFalse);
     }
 
-    Some(BlockRange { first: cond, last: merge })
+    Some(BlockRange {
+        first: cond,
+        last: merge,
+    })
 }
 
 /// while_statement: condition (loop header) -> body -> loop back to condition
@@ -263,7 +285,10 @@ fn build_while(ctx: &mut CfgCtx, while_node: &Node) -> Option<BlockRange> {
     }
     ctx.add_edge(header, exit, BlockEdge::CondFalse);
 
-    Some(BlockRange { first: header, last: exit })
+    Some(BlockRange {
+        first: header,
+        last: exit,
+    })
 }
 
 /// do_statement: body -> condition -> loop back to body
@@ -285,7 +310,10 @@ fn build_do_while(ctx: &mut CfgCtx, do_node: &Node) -> Option<BlockRange> {
         ctx.add_edge(header, exit, BlockEdge::Seq);
     }
 
-    Some(BlockRange { first: header, last: exit })
+    Some(BlockRange {
+        first: header,
+        last: exit,
+    })
 }
 
 /// for_statement: init -> condition -> body -> increment -> condition
@@ -314,7 +342,10 @@ fn build_for(ctx: &mut CfgCtx, for_node: &Node) -> Option<BlockRange> {
     }
     ctx.add_edge(header, exit, BlockEdge::CondFalse);
 
-    Some(BlockRange { first: header, last: exit })
+    Some(BlockRange {
+        first: header,
+        last: exit,
+    })
 }
 
 /// for_each_statement: similar to for — condition per iteration
@@ -331,7 +362,10 @@ fn build_foreach(ctx: &mut CfgCtx, foreach_node: &Node) -> Option<BlockRange> {
     }
     ctx.add_edge(header, exit, BlockEdge::CondFalse);
 
-    Some(BlockRange { first: header, last: exit })
+    Some(BlockRange {
+        first: header,
+        last: exit,
+    })
 }
 
 /// switch_statement: selector -> each case's first statement -> merge
@@ -366,7 +400,10 @@ fn build_switch(ctx: &mut CfgCtx, switch_node: &Node) -> Option<BlockRange> {
     }
     ctx.add_edge(header, merge, BlockEdge::CondFalse);
 
-    Some(BlockRange { first: header, last: merge })
+    Some(BlockRange {
+        first: header,
+        last: merge,
+    })
 }
 
 /// try_statement: body (normal/throw) -> catch(es) -> finally (always)
@@ -386,7 +423,8 @@ fn build_try(ctx: &mut CfgCtx, try_node: &Node) -> Option<BlockRange> {
         }
     }
 
-    let finally_result: Option<BlockRange> = try_node.named_children(&mut try_node.walk())
+    let finally_result: Option<BlockRange> = try_node
+        .named_children(&mut try_node.walk())
         .find(|c| c.kind() == "finally_clause")
         .and_then(|f| {
             if let Some(fb) = f.named_child(0) {
@@ -397,7 +435,9 @@ fn build_try(ctx: &mut CfgCtx, try_node: &Node) -> Option<BlockRange> {
         });
 
     let first = body_result.as_ref().map(|b| b.first)?;
-    let last = finally_result.as_ref().map(|f| f.last)
+    let last = finally_result
+        .as_ref()
+        .map(|f| f.last)
         .or_else(|| catches.last().map(|c| c.last))
         .or_else(|| body_result.as_ref().map(|b| b.last))?;
 
@@ -461,7 +501,8 @@ mod tests {
 
     #[test]
     fn test_for() {
-        let g = build_cfg("class C { void M() { for (int i = 0; i < 10; i++) { foo(); } } }").unwrap();
+        let g =
+            build_cfg("class C { void M() { for (int i = 0; i < 10; i++) { foo(); } } }").unwrap();
         assert!(g.node_count() >= 5);
     }
 
@@ -485,7 +526,10 @@ mod tests {
 
     #[test]
     fn test_try_catch_finally() {
-        let g = build_cfg("class C { void M() { try { foo(); } catch { bar(); } finally { baz(); } } }").unwrap();
+        let g = build_cfg(
+            "class C { void M() { try { foo(); } catch { bar(); } finally { baz(); } } }",
+        )
+        .unwrap();
         assert!(g.node_count() >= 5);
     }
 

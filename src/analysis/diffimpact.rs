@@ -27,7 +27,12 @@ pub struct DiffImpactResult {
 }
 
 /// Compare two versions of a project and find changes + affected places.
-pub fn build_diff_impact(v1_path: &Path, v2_path: &Path, target_class: &str, target_method: &str) -> anyhow::Result<DiffImpactResult> {
+pub fn build_diff_impact(
+    v1_path: &Path,
+    v2_path: &Path,
+    target_class: &str,
+    target_method: &str,
+) -> anyhow::Result<DiffImpactResult> {
     let (_tg1, cg1) = load_project(v1_path)?;
     let (_tg2, cg2) = load_project(v2_path)?;
 
@@ -68,7 +73,9 @@ pub fn build_diff_impact(v1_path: &Path, v2_path: &Path, target_class: &str, tar
         let mut m: HashMap<String, Vec<String>> = HashMap::new();
         for c in &cg.calls {
             let key = format!("{}.{}", c.callee_class, c.callee);
-            m.entry(key).or_default().push(format!("{}.{}", c.caller_class, c.caller_method));
+            m.entry(key)
+                .or_default()
+                .push(format!("{}.{}", c.caller_class, c.caller_method));
         }
         m
     };
@@ -81,17 +88,26 @@ pub fn build_diff_impact(v1_path: &Path, v2_path: &Path, target_class: &str, tar
             let v1_callers = callers1.get(key).cloned().unwrap_or_default();
             let v1_set: HashSet<&str> = v1_callers.iter().map(|s| s.as_str()).collect();
             let v2_set: HashSet<&str> = v2_callers.iter().map(|s| s.as_str()).collect();
-            let removed_callers: Vec<String> = v1_set.difference(&v2_set).map(|s| s.to_string()).collect();
-            let added_callers: Vec<String> = v2_set.difference(&v1_set).map(|s| s.to_string()).collect();
+            let removed_callers: Vec<String> =
+                v1_set.difference(&v2_set).map(|s| s.to_string()).collect();
+            let added_callers: Vec<String> =
+                v2_set.difference(&v1_set).map(|s| s.to_string()).collect();
             if !removed_callers.is_empty() || !added_callers.is_empty() {
-                changes.insert(key.clone(), ChangeKind::CallersChanged { removed_callers, added_callers });
+                changes.insert(
+                    key.clone(),
+                    ChangeKind::CallersChanged {
+                        removed_callers,
+                        added_callers,
+                    },
+                );
             }
         }
     }
 
     // Build combined impact: for each changed method (focus on v2), trace callers in v2
     let mut all_changed_v2: Vec<(String, String)> = Vec::new();
-    let v2_method_set: HashSet<String> = keys2.iter().map(|(c, m)| format!("{}.{}", c, m)).collect();
+    let v2_method_set: HashSet<String> =
+        keys2.iter().map(|(c, m)| format!("{}.{}", c, m)).collect();
 
     for key in changes.keys() {
         if v2_method_set.contains(key) {
@@ -116,6 +132,7 @@ pub fn build_diff_impact(v1_path: &Path, v2_path: &Path, target_class: &str, tar
                 nodes: BTreeMap::new(),
                 edges: Vec::new(),
                 target: String::new(),
+                routes: Vec::new(),
             }
         }
     };
@@ -132,8 +149,13 @@ pub fn diff_impact_to_dot(result: &DiffImpactResult, title: &str) -> String {
     let mut dot = String::new();
 
     // Summary section
-    dot.push_str(&format!("digraph DiffImpact {{\n  rankdir=BT;\n  node [shape=box style=rounded];\n\n"));
-    dot.push_str(&format!("  label=\"{}\";\n  labelloc=t;\n  fontsize=14;\n\n", title));
+    dot.push_str(&format!(
+        "digraph DiffImpact {{\n  rankdir=BT;\n  node [shape=box style=rounded];\n\n"
+    ));
+    dot.push_str(&format!(
+        "  label=\"{}\";\n  labelloc=t;\n  fontsize=14;\n\n",
+        title
+    ));
 
     // Render impact graph first (with coloring for changed nodes)
     if !result.impact.target.is_empty() {
@@ -176,7 +198,10 @@ pub fn diff_impact_to_dot(result: &DiffImpactResult, title: &str) -> String {
                 ChangeKind::Removed => "lightcoral",
                 ChangeKind::CallersChanged { .. } => "lightyellow",
             };
-            dot.push_str(&format!("  \"{}\" [label=\"{}\\n{}\" style=filled fillcolor={fill}];\n", key, key, kind_label));
+            dot.push_str(&format!(
+                "  \"{}\" [label=\"{}\\n{}\" style=filled fillcolor={fill}];\n",
+                key, key, kind_label
+            ));
         }
     }
 

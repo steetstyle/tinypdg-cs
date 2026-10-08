@@ -14,6 +14,15 @@ pub struct RouteEntry {
     pub class: String,
     pub handler: String,
     pub source: String,
+    /// `Class.Method` that performs the registration, when known.
+    ///
+    /// For minimal APIs the handler is reached by a method group reference
+    /// (`MapGet("/x", Type.Handler)`), which is not a call site, so the call
+    /// graph alone reports zero callers for every endpoint handler. Recording
+    /// the registrar lets impact analysis attribute an endpoint to the code that
+    /// wires it up. `None` when the registration site could not be resolved.
+    #[serde(default)]
+    pub registrar: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, serde::Serialize)]
@@ -100,7 +109,8 @@ fn extract_controller_routes(node: Node, source: &str, table: &mut RouteTable) {
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         if child.kind() == "class_declaration" {
-            if let Some(class_name) = child.child_by_field_name("name")
+            if let Some(class_name) = child
+                .child_by_field_name("name")
                 .and_then(|n| n.utf8_text(source.as_bytes()).ok())
                 .map(|s| s.to_string())
             {
@@ -111,7 +121,13 @@ fn extract_controller_routes(node: Node, source: &str, table: &mut RouteTable) {
                 let mut m_cursor = child.walk();
                 for decl in child.children(&mut m_cursor) {
                     if decl.kind() == "declaration_list" {
-                        extract_methods_from_declaration_list(decl, source, &class_name, &base_path, table);
+                        extract_methods_from_declaration_list(
+                            decl,
+                            source,
+                            &class_name,
+                            &base_path,
+                            table,
+                        );
                     }
                 }
             }
@@ -153,7 +169,8 @@ fn extract_methods_from_declaration_list(
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         if child.kind() == "method_declaration" {
-            if let Some(method_name) = child.child_by_field_name("name")
+            if let Some(method_name) = child
+                .child_by_field_name("name")
                 .and_then(|n| n.utf8_text(source.as_bytes()).ok())
                 .map(|s| s.to_string())
             {
@@ -166,6 +183,7 @@ fn extract_methods_from_declaration_list(
                         class: class_name.to_string(),
                         handler: method_name.clone(),
                         source: "Controller".into(),
+                        registrar: Some(format!("{}.{}", class_name, method_name)),
                     });
                 }
             }
@@ -182,7 +200,8 @@ fn extract_route_attribute(class_node: &Node, source: &str) -> Option<String> {
             let mut a_cursor = child.walk();
             for attr in child.children(&mut a_cursor) {
                 if attr.kind() == "attribute" {
-                    if let Some(attr_name) = attr.child(0)
+                    if let Some(attr_name) = attr
+                        .child(0)
                         .and_then(|n| n.utf8_text(source.as_bytes()).ok())
                     {
                         if attr_name == "Route" {
@@ -207,7 +226,8 @@ fn extract_http_method_attributes(
             let mut a_cursor = child.walk();
             for attr in child.children(&mut a_cursor) {
                 if attr.kind() == "attribute" {
-                    if let Some(attr_name) = attr.child(0)
+                    if let Some(attr_name) = attr
+                        .child(0)
                         .and_then(|n| n.utf8_text(source.as_bytes()).ok())
                     {
                         let http_method = match attr_name {
@@ -259,7 +279,10 @@ fn extract_string_content(node: &Node, source: &str) -> Option<String> {
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         if child.kind() == "string_literal_content" {
-            return child.utf8_text(source.as_bytes()).ok().map(|s| s.to_string());
+            return child
+                .utf8_text(source.as_bytes())
+                .ok()
+                .map(|s| s.to_string());
         }
     }
     None
@@ -371,7 +394,9 @@ fn member_name(node: Node, source: &str) -> Option<String> {
 }
 
 fn node_text(node: Node, source: &str) -> Option<String> {
-    node.utf8_text(source.as_bytes()).ok().map(|s| s.to_string())
+    node.utf8_text(source.as_bytes())
+        .ok()
+        .map(|s| s.to_string())
 }
 
 /// First string-literal argument of an `argument_list`.
@@ -542,6 +567,7 @@ fn scan_minimal_api_routes(
                                         table.add(RouteEntry {
                                             http_method: verb.to_string(),
                                             path: full_path,
+                                            registrar: resolve_registrar(child, source),
                                             class,
                                             handler: method,
                                             source: "MinimalApi".into(),
@@ -565,11 +591,7 @@ fn scan_minimal_api_routes(
 }
 
 /// Prefix for a Map* call, given its callee member-access node.
-fn resolve_prefix(
-    func: Node,
-    source: &str,
-    groups: &HashMap<String, String>,
-) -> String {
+fn resolve_prefix(func: Node, source: &str, groups: &HashMap<String, String>) -> String {
     func.child_by_field_name("expression")
         .and_then(|expr| {
             if expr.kind() == "identifier" {
@@ -583,11 +605,47 @@ fn resolve_prefix(
         .unwrap_or_default()
 }
 
+/// Resolve the `Class.Method` that performs a route registration.
+///
+/// For `app.MapGet(...)` inside `EndpointExtension.MapAgencyApi` this is
+/// `EndpointExtension.MapAgencyApi`. Returns `None` for top-level statements
+/// such as `Program.Main` bodies written without a wrapping method, or when no
+/// enclosing method can be found.
+fn resolve_registrar(node: Node, source: &str) -> Option<String> {
+    let class = resolve_local_function_class(node, source)?;
+    let mut current = node.parent();
+    while let Some(n) = current {
+        if n.kind() == "method_declaration" {
+            let method = n
+                .child_by_field_name("name")
+                .and_then(|x| x.utf8_text(source.as_bytes()).ok())?;
+            return Some(format!("{}.{}", class, method));
+        }
+        // A lambda or local function still belongs to the enclosing method, so
+        // keep walking up to find it.
+        if matches!(
+            n.kind(),
+            "lambda_expression"
+                | "anonymous_method_expression"
+                | "parenthesized_lambda_expression"
+                | "class_declaration"
+                | "method_declaration"
+        ) {
+            break;
+        }
+        current = n.parent();
+    }
+    // Registered from a field initializer or top-level statement: attribute the
+    // class itself so the caller is still named.
+    Some(class)
+}
+
 fn resolve_local_function_class(node: Node, source: &str) -> Option<String> {
     let mut current = Some(node);
     while let Some(n) = current {
         if n.kind() == "class_declaration" {
-            return n.child_by_field_name("name")
+            return n
+                .child_by_field_name("name")
                 .and_then(|name| name.utf8_text(source.as_bytes()).ok())
                 .map(|s| s.to_string());
         }
@@ -634,13 +692,21 @@ public class CatalogApi : ControllerBase
         extract_controller_routes(tree.root_node(), src, &mut table);
         assert_eq!(table.routes.len(), 2);
 
-        let get = table.routes.iter().find(|r| r.http_method == "GET").unwrap();
+        let get = table
+            .routes
+            .iter()
+            .find(|r| r.http_method == "GET")
+            .unwrap();
         assert_eq!(get.path, "/api/catalog/{id}");
         assert_eq!(get.class, "CatalogApi");
         assert_eq!(get.handler, "GetItemById");
         assert_eq!(get.source, "Controller");
 
-        let post = table.routes.iter().find(|r| r.http_method == "POST").unwrap();
+        let post = table
+            .routes
+            .iter()
+            .find(|r| r.http_method == "POST")
+            .unwrap();
         assert_eq!(post.path, "/api/catalog");
         assert_eq!(post.class, "CatalogApi");
         assert_eq!(post.handler, "CreateItem");
@@ -701,7 +767,11 @@ public class CatalogApi : ControllerBase
         let mut table = RouteTable::new();
         extract_controller_routes(tree.root_node(), src, &mut table);
         assert_eq!(table.routes.len(), 3);
-        let methods: Vec<&str> = table.routes.iter().map(|r| r.http_method.as_str()).collect();
+        let methods: Vec<&str> = table
+            .routes
+            .iter()
+            .map(|r| r.http_method.as_str())
+            .collect();
         assert!(methods.contains(&"GET"));
         assert!(methods.contains(&"PUT"));
         assert!(methods.contains(&"DELETE"));
@@ -719,12 +789,20 @@ app.MapPost("/items", CreateItem);
         let table = min_routes(src);
         assert_eq!(table.routes.len(), 2);
 
-        let get = table.routes.iter().find(|r| r.http_method == "GET").unwrap();
+        let get = table
+            .routes
+            .iter()
+            .find(|r| r.http_method == "GET")
+            .unwrap();
         assert_eq!(get.path, "/items");
         assert_eq!(get.handler, "GetItemById");
         assert_eq!(get.source, "MinimalApi");
 
-        let post = table.routes.iter().find(|r| r.http_method == "POST").unwrap();
+        let post = table
+            .routes
+            .iter()
+            .find(|r| r.http_method == "POST")
+            .unwrap();
         assert_eq!(post.path, "/items");
         assert_eq!(post.handler, "CreateItem");
     }
@@ -797,13 +875,26 @@ public class Startup
         let tree = parse_source(src).unwrap();
         let mut table = RouteTable::new();
         extract_controller_routes(tree.root_node(), src, &mut table);
-        extract_minimal_api_routes(tree.root_node(), src, &mut table, &mut ExtractionStats::default());
+        extract_minimal_api_routes(
+            tree.root_node(),
+            src,
+            &mut table,
+            &mut ExtractionStats::default(),
+        );
         assert_eq!(table.routes.len(), 3);
 
-        let controller_routes: Vec<&RouteEntry> = table.routes.iter().filter(|r| r.source == "Controller").collect();
+        let controller_routes: Vec<&RouteEntry> = table
+            .routes
+            .iter()
+            .filter(|r| r.source == "Controller")
+            .collect();
         assert_eq!(controller_routes.len(), 2);
 
-        let minimal_routes: Vec<&RouteEntry> = table.routes.iter().filter(|r| r.source == "MinimalApi").collect();
+        let minimal_routes: Vec<&RouteEntry> = table
+            .routes
+            .iter()
+            .filter(|r| r.source == "MinimalApi")
+            .collect();
         assert_eq!(minimal_routes.len(), 1);
         assert_eq!(minimal_routes[0].class, "Startup");
         assert_eq!(minimal_routes[0].handler, "GetAllItems");
@@ -813,10 +904,19 @@ public class Startup
     fn test_combine_paths() {
         assert_eq!(combine_paths(&None, &None), "/");
         assert_eq!(combine_paths(&Some("api".into()), &None), "/api");
-        assert_eq!(combine_paths(&Some("api/catalog".into()), &Some("{id}".into())), "/api/catalog/{id}");
+        assert_eq!(
+            combine_paths(&Some("api/catalog".into()), &Some("{id}".into())),
+            "/api/catalog/{id}"
+        );
         assert_eq!(combine_paths(&None, &Some("{id}".into())), "/{id}");
-        assert_eq!(combine_paths(&Some("api/".into()), &Some("/{id}".into())), "/{id}");
-        assert_eq!(combine_paths(&Some("api".into()), &Some("items".into())), "/api/items");
+        assert_eq!(
+            combine_paths(&Some("api/".into()), &Some("/{id}".into())),
+            "/{id}"
+        );
+        assert_eq!(
+            combine_paths(&Some("api".into()), &Some("items".into())),
+            "/api/items"
+        );
     }
 
     #[test]
@@ -883,13 +983,25 @@ public class ProductsController : ControllerBase
         extract_controller_routes(tree.root_node(), src, &mut table);
         assert_eq!(table.routes.len(), 3);
 
-        let get = table.routes.iter().find(|r| r.http_method == "GET").unwrap();
+        let get = table
+            .routes
+            .iter()
+            .find(|r| r.http_method == "GET")
+            .unwrap();
         assert_eq!(get.path, "/");
 
-        let post = table.routes.iter().find(|r| r.http_method == "POST").unwrap();
+        let post = table
+            .routes
+            .iter()
+            .find(|r| r.http_method == "POST")
+            .unwrap();
         assert_eq!(post.path, "/");
 
-        let put = table.routes.iter().find(|r| r.http_method == "PUT").unwrap();
+        let put = table
+            .routes
+            .iter()
+            .find(|r| r.http_method == "PUT")
+            .unwrap();
         assert_eq!(put.path, "/{id}");
     }
 
@@ -976,7 +1088,11 @@ public static class EndpointExtension
 }
 "#;
         let table = min_routes(src);
-        assert_eq!(table.routes.len(), 1, "chained call must not duplicate the route");
+        assert_eq!(
+            table.routes.len(),
+            1,
+            "chained call must not duplicate the route"
+        );
         assert_eq!(table.routes[0].path, "/api/agency");
         assert_eq!(table.routes[0].class, "PostCreateAgencyEndpoint");
     }
@@ -1048,7 +1164,10 @@ public class Program
 }
 "#;
         let (table, stats) = min_routes_with_stats(src);
-        assert!(table.routes.is_empty(), "lambda handler has no named method");
+        assert!(
+            table.routes.is_empty(),
+            "lambda handler has no named method"
+        );
         assert_eq!(stats.inline_lambda_routes, 1);
     }
 
@@ -1073,6 +1192,44 @@ public class Program
         assert_eq!(join_prefix("/api", "/items"), "/api/items");
         assert_eq!(join_prefix("api/", "items/"), "/api/items");
         assert_eq!(join_prefix("/api", "/"), "/api");
+    }
+
+    /// The registrar is what lets impact analysis attribute a minimal-API
+    /// endpoint to the code that wires it up, since `Type.Handler` is a method
+    /// group reference rather than a call site.
+    #[test]
+    fn test_registrar_is_recorded_for_minimal_api() {
+        let src = r#"
+public static class EndpointExtension
+{
+    public static IEndpointRouteBuilder MapAgencyApi(this IEndpointRouteBuilder app)
+    {
+        var agencyApi = app.MapGroup("");
+        agencyApi.MapGet("/api/agency/{agencyId:guid}/member",
+            GetMembersEndpoint.Handler);
+        return app;
+    }
+}
+"#;
+        let table = min_routes(src);
+        assert_eq!(table.routes.len(), 1);
+        assert_eq!(
+            table.routes[0].registrar.as_deref(),
+            Some("EndpointExtension.MapAgencyApi"),
+            "registrar must point at the registration site, not the handler"
+        );
+    }
+
+    #[test]
+    fn test_registrar_falls_back_to_class_for_toplevel_statement() {
+        let src = r#"
+var app = WebApplication.CreateBuilder(args).Build();
+app.MapGet("/cost", CostEndpoint.Handler);
+"#;
+        let table = min_routes(src);
+        assert_eq!(table.routes.len(), 1);
+        // No enclosing class or method, so no registrar can be named.
+        assert_eq!(table.routes[0].registrar, None);
     }
 
     #[test]
@@ -1105,16 +1262,28 @@ public static class EndpointExtension
         assert_eq!(stats.inline_lambda_routes, 0);
         assert_eq!(table.routes.len(), 3);
 
-        let get = table.routes.iter().find(|r| r.http_method == "GET").unwrap();
+        let get = table
+            .routes
+            .iter()
+            .find(|r| r.http_method == "GET")
+            .unwrap();
         assert_eq!(get.path, "/api/agency/{agencyId}/member");
         assert_eq!(get.class, "GetAgencyMembersEndpoint");
         assert_eq!(get.handler, "Handler");
 
-        let del = table.routes.iter().find(|r| r.http_method == "DELETE").unwrap();
+        let del = table
+            .routes
+            .iter()
+            .find(|r| r.http_method == "DELETE")
+            .unwrap();
         assert_eq!(del.path, "/api/agency/{agencyId}/member/{memberId}");
         assert_eq!(del.class, "RemoveMemberEndpoint");
 
-        let post = table.routes.iter().find(|r| r.http_method == "POST").unwrap();
+        let post = table
+            .routes
+            .iter()
+            .find(|r| r.http_method == "POST")
+            .unwrap();
         assert_eq!(post.path, "/api/agency");
         assert_eq!(post.class, "PostCreateAgencyEndpoint");
     }
