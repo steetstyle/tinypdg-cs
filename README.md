@@ -17,10 +17,15 @@ resolve    -- call resolution (DI, reflection, CHA, virtual dispatch)
 callgraph  -- focused call graph for a class, with dispatch tracing
 detect     -- design pattern detection (GoF 22 + .NET idioms)
 route      -- HTTP route extraction (Controllers + Minimal APIs)
+traverse   -- interactive PRAXIS-style traversal of a call graph
 impact     -- impact analysis: DOT graph of change ripple through callers
 diffimpact -- compare two versions: show changes + affected places as DOT
-serve      -- HTTP server for tool integration
+serve      -- serve the analysis over MCP (stdio or Streamable HTTP)
 ```
+
+The same analysis is also available as seven MCP tools, which is what
+[tiny-rca](https://github.com/steetstyle/tiny-rca) and
+[tinylink](https://github.com/steetstyle/tinylink) drive.
 
 ## Design pattern detection
 
@@ -77,6 +82,11 @@ src/
 - tree-sitter 0.25
 - tree-sitter-c-sharp 0.23
 - petgraph 0.6
+
+Feature flags: `default = []`, so a plain `cargo build` gives you the CLI and the
+library with no MCP stack and no tokio runtime. `mcp` adds the stdio server;
+`mcp-http` adds Streamable HTTP. The MCP tests need one of them, so a full green
+run is `cargo test --features mcp-http`.
 
 ## Examples on dotnet/eShop
 
@@ -367,11 +377,54 @@ $ tinypdg-cs parse src/Catalog.API/Infrastructure/CatalogContext.cs
 }
 ```
 
+## MCP server
+
+Every capability above is also an MCP tool, so an agent can walk the graph
+instead of shelling out per question.
+
+```bash
+cargo build --release --features mcp       # serve over stdio
+cargo build --release --features mcp-http  # serve over Streamable HTTP too
+```
+
+```bash
+tiny-pdg-cs serve                    # stdio
+tiny-pdg-cs serve --http --port 8081 # Streamable HTTP
+```
+
+| Tool | Answers |
+| --- | --- |
+| `find_callers` | who reaches this method, direct and transitive, with source lines |
+| `method_callees` | what this method calls, followed outwards to a depth |
+| `method_pdg` | the PDG for a method: basic blocks with line ranges and dependences |
+| `diff_impact` | what changed between two versions, and which callers are affected |
+| `find_patterns` | GoF and .NET idioms, with confidence and evidence |
+| `list_routes` | HTTP routes with handler class and method, paged |
+| `project_summary` | classes, method counts and call-site totals for a project |
+
+Route listing against a real project:
+
+```json
+{"count":14,"files_parsed":18,"files_failed":0,"total_matched":14,
+ "inline_lambda_routes":0,"has_more":false,
+ "routes":[{"class":"PostCreateAgencyEndpoint","handler":"Handler",
+            "method":"POST","pattern":"/api/agency","style":"MinimalApi"}]}
+```
+
+`files_failed` is reported rather than swallowed: a project that half-parses is a
+different answer from one that does not, and an agent that cannot tell will
+report a clean result built on a partial read.
+
+SSE is not offered. The MCP spec deprecated the standalone SSE transport and the
+Rust SDK ships no server for it, so there is nothing to enable. The server binds
+loopback by default and has no authentication — put an authenticating proxy in
+front before exposing it.
+
 ## Tests
 
 ```
-cargo test        # 183 tests, unit + integration + fixtures
-cargo bench       # pdg benchmarks
+cargo test --features mcp-http   # 260 tests, unit + integration + fixtures
+cargo bench                      # pdg benchmarks
 ```
 
 Fixture categories: control flow, exceptions, async, data flow, DI, factory, reflection, virtual dispatch, abstract classes, interfaces, hammock blocks, cross-file resolution, dynamic calls, pattern examples.
