@@ -98,7 +98,7 @@ fn collect_cs_files(dir: &Path, files: &mut Vec<String>) {
             let path = entry.path();
             if path.is_dir() {
                 collect_cs_files(&path, files);
-            } else if path.extension().map_or(false, |e| e == "cs") {
+            } else if path.extension().is_some_and(|e| e == "cs") {
                 files.push(path.to_string_lossy().to_string());
             }
         }
@@ -293,7 +293,7 @@ fn combine_paths(base: &Option<String>, sub: &Option<String>) -> String {
     let sub = sub.as_deref().unwrap_or("");
 
     if sub.starts_with('/') {
-        return ensure_leading_slash(&sub);
+        return ensure_leading_slash(sub);
     }
 
     let mut parts = Vec::new();
