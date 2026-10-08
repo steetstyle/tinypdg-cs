@@ -19,7 +19,10 @@ use rmcp::{
 };
 use serde_json::Value;
 
-use tools::{FindCallersArgs, FindPatternsArgs, ListRoutesArgs, MethodPdgArgs, ProjectSummaryArgs};
+use tools::{
+    DiffImpactArgs, FindCallersArgs, FindPatternsArgs, ListRoutesArgs, MethodCalleesArgs,
+    MethodPdgArgs, ProjectSummaryArgs,
+};
 
 pub struct AnalysisServer {
     tool_router: ToolRouter<AnalysisServer>,
@@ -77,7 +80,7 @@ impl AnalysisServer {
     /// Who calls a method, directly and transitively.
     #[tool(
         name = "find_callers",
-        description = "Find direct and transitive callers of a method. Use this for \"what breaks if I change this\" and \"what could have called this\". For minimal-API handlers the caller is the route registration site.",
+        description = "Find direct and transitive callers of a method, with the source lines of each call site as evidence. Use it for \"what breaks if I change this\" and \"what could have called this\". For minimal-API handlers the caller is the route registration site. Narrow with max_distance, exclude_test_projects, limit and offset.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -124,6 +127,39 @@ impl AnalysisServer {
     ) -> Result<String, McpError> {
         wrap(tools::find_patterns(args.0))
     }
+
+    /// What changed between two versions, and what the change reaches.
+    #[tool(
+        name = "diff_impact",
+        description = "Compare two versions of a C# project and report what changed plus the blast radius of that change. Use it for the post-incident question \"what did we deploy that broke this\": the signal that matters is a method that LOST a caller, which is what only_lost_callers filters for (it defaults to true).",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    pub async fn diff_impact(&self, args: Parameters<DiffImpactArgs>) -> Result<String, McpError> {
+        wrap(tools::diff_impact(args.0))
+    }
+
+    /// What a method calls.
+    #[tool(
+        name = "method_callees",
+        description = "List what a method calls, following the call graph outwards to a given depth. The complement to find_callers: knowing who reaches a method says nothing about what it then does. Set internal_only to hide framework and third-party callees.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    pub async fn method_callees(
+        &self,
+        args: Parameters<MethodCalleesArgs>,
+    ) -> Result<String, McpError> {
+        wrap(tools::method_callees(args.0))
+    }
 }
 
 #[tool_handler(router = self.tool_router)]
@@ -158,7 +194,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn router_registers_exactly_the_five_tools() {
+    fn router_registers_the_analysis_tools() {
         let router = AnalysisServer::tool_router();
         let names: Vec<String> = router
             .list_all()
@@ -171,13 +207,15 @@ mod tests {
             "find_callers",
             "method_pdg",
             "find_patterns",
+            "diff_impact",
+            "method_callees",
         ] {
             assert!(
                 names.contains(&expected.to_string()),
                 "missing {expected}: {names:?}"
             );
         }
-        assert_eq!(names.len(), 5, "unexpected tool set: {names:?}");
+        assert_eq!(names.len(), 7, "unexpected tool set: {names:?}");
     }
 
     #[test]

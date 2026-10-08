@@ -19,6 +19,18 @@ pub struct FindCallersArgs {
     pub path: String,
     pub class: String,
     pub method: String,
+    /// Drop callers further than this many hops away (1 = direct callers only).
+    #[serde(default)]
+    pub max_distance: Option<usize>,
+    /// Exclude callers whose project looks like a test project (`*.Tests`).
+    #[serde(default)]
+    pub exclude_test_projects: Option<bool>,
+    /// Cap how many callers are listed.
+    #[serde(default)]
+    pub limit: Option<usize>,
+    /// How many callers to skip, for paging through a long caller list.
+    #[serde(default)]
+    pub offset: Option<usize>,
 }
 
 /// One caller of the target, with its reachability depth.
@@ -30,20 +42,35 @@ pub struct CallerInfo {
     pub direct: bool,
     /// Shortest hop count from the target. 1 = direct caller.
     pub distance: usize,
+    /// Source lines where this method calls the target. Empty when the
+    /// relationship came from route registration rather than a call site.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub evidence: Vec<usize>,
 }
 
 pub fn find_callers(args: FindCallersArgs) -> Result<Value, String> {
     let path = Path::new(&args.path);
     let project = cache::get_or_build(path).map_err(|e| e.to_string())?;
+    let routes = crate::route::extractor::extract(&args.path).map_err(|e| e.to_string())?;
 
-    let impact = crate::analysis::impact::build_impact_graph(path, &args.class, &args.method)
-        .map_err(|e| e.to_string())?;
-
-    let (graph, _, _) = impact;
+    // Build from the cached graph rather than the path-based wrapper: the wrapper
+    // re-parses the whole project on every call, which is exactly what the cache
+    // exists to avoid.
+    let graph = crate::analysis::impact::build_impact_from(
+        &project.type_graph,
+        &project.call_graph,
+        &routes,
+        &args.class,
+        &args.method,
+    )
+    .map_err(|e| e.to_string())?;
 
     // Nodes other than the target are its callers; edge direction is
     // caller → callee, so an edge INTO the target names a direct caller.
     let target = graph.target.clone();
+    // "Calls the target directly" means an edge into the target — nothing else.
+    // The node's own caller count is not that: a node reached through a helper
+    // has callers of its own, which made every transitive caller look direct.
     let direct: std::collections::HashSet<&String> = graph
         .edges
         .iter()
@@ -51,20 +78,49 @@ pub fn find_callers(args: FindCallersArgs) -> Result<Value, String> {
         .map(|(caller, _)| caller)
         .collect();
 
+    // A minimal-API handler's caller is its registration site, which has no edge
+    // in the call graph; the impact graph seeds it as a node instead.
+    let registrars: std::collections::HashSet<&String> = graph
+        .routes
+        .iter()
+        .filter_map(|r| r.registrar.as_ref())
+        .collect();
+
+    // Line numbers of each call site, so a caller can be shown where the call
+    // actually is. This is the "evidence" the traversal engine is not available
+    // to provide: stateless and exact.
+    let mut call_sites: std::collections::HashMap<(String, String), Vec<usize>> =
+        std::collections::HashMap::new();
+    for c in &project.call_graph.calls {
+        let (callee_class, _) = crate::analysis::diffimpact::resolve_callee_class(c);
+        if callee_class.is_empty() {
+            continue;
+        }
+        let caller = format!("{}.{}", c.caller_class, c.caller_method);
+        let callee = format!("{}.{}", callee_class, c.callee);
+        call_sites.entry((caller, callee)).or_default().push(c.line);
+    }
+
     let mut callers: Vec<CallerInfo> = graph
         .nodes
         .iter()
         .filter(|(node, _)| *node != &target)
-        .map(|(node, (direct_count, _))| CallerInfo {
-            method: node.clone(),
-            direct: direct.contains(node) || *direct_count > 0,
-            // The impact graph records counts, not per-node depth; direct
-            // callers get 1 and everything else is reported as transitive.
-            distance: if direct.contains(node) || *direct_count > 0 {
-                1
-            } else {
-                2
-            },
+        .map(|(node, (_direct_count, _))| {
+            let is_direct = direct.contains(node) || registrars.contains(node);
+            let mut lines = call_sites
+                .get(&(node.clone(), target.clone()))
+                .cloned()
+                .unwrap_or_default();
+            lines.sort_unstable();
+            lines.dedup();
+            CallerInfo {
+                method: node.clone(),
+                direct: is_direct,
+                // The impact graph records counts, not per-node depth; direct
+                // callers get 1 and everything else is reported as transitive.
+                distance: if is_direct { 1 } else { 2 },
+                evidence: lines,
+            }
         })
         .collect();
     callers.sort_by(|a, b| {
@@ -73,11 +129,29 @@ pub fn find_callers(args: FindCallersArgs) -> Result<Value, String> {
             .then_with(|| a.method.cmp(&b.method))
     });
 
+    // Filters. Applied after the graph is built so counts can still report what
+    // was filtered out — a caller that silently gets an empty list cannot tell
+    // "no callers" from "my filter was too narrow".
+    let total_before_filter = callers.len();
+    if let Some(max) = args.max_distance {
+        callers.retain(|c| c.distance <= max);
+    }
+    if args.exclude_test_projects.unwrap_or(false) {
+        callers.retain(|c| !looks_like_test_project(&c.method));
+    }
+    let after_filter = callers.len();
+
+    let offset = args.offset.unwrap_or(0);
+    let limit = args.limit.unwrap_or(usize::MAX).max(1);
+    let window: Vec<CallerInfo> = callers.into_iter().skip(offset).take(limit).collect();
+
     Ok(json!({
         "target": target,
         "project": project.root.display().to_string(),
-        "caller_count": callers.len(),
-        "callers": callers,
+        "caller_count": after_filter,
+        "callers": window,
+        "total_before_filter": total_before_filter,
+        "filtered_out": total_before_filter.saturating_sub(after_filter),
         // HTTP routes reaching this method. For a minimal-API handler this is
         // the only caller information that exists: the handler is wired up by a
         // method group reference, which is not a call site in the call graph.
@@ -87,6 +161,19 @@ pub fn find_callers(args: FindCallersArgs) -> Result<Value, String> {
         "edges": graph.edges,
         "parsed_files": project.file_count,
     }))
+}
+
+/// Does this method belong to a project that looks like a test project?
+///
+/// Matched on the type graph's file paths rather than on namespaces, because a
+/// test project's namespace usually mirrors production while its path does not.
+fn looks_like_test_project(method: &str) -> bool {
+    let class = method.split_once('.').map(|x| x.0).unwrap_or(method);
+    let lower = class.to_lowercase();
+    lower.ends_with("tests")
+        || lower.contains(".tests.")
+        || lower.starts_with("tests.")
+        || lower.contains("test")
 }
 
 // ───────────────────────── method_pdg ─────────────────────────
@@ -210,6 +297,18 @@ pub struct ListRoutesArgs {
     pub path: String,
     /// Case-insensitive substring filter over the pattern and handler class.
     pub filter: Option<String>,
+    /// Restrict to one HTTP verb (`GET`, `POST`, ...).
+    #[serde(default)]
+    pub http_method: Option<String>,
+    /// Restrict to routes whose pattern starts with this prefix.
+    #[serde(default)]
+    pub path_prefix: Option<String>,
+    /// Cap how many routes are listed.
+    #[serde(default)]
+    pub limit: Option<usize>,
+    /// How many routes to skip, for paging through a large route table.
+    #[serde(default)]
+    pub offset: Option<usize>,
 }
 
 pub fn list_routes(args: ListRoutesArgs) -> Result<Value, String> {
@@ -217,17 +316,38 @@ pub fn list_routes(args: ListRoutesArgs) -> Result<Value, String> {
         crate::route::extractor::extract_with_stats(&args.path).map_err(|e| e.to_string())?;
 
     let needle = args.filter.as_ref().map(|f| f.to_lowercase());
-    let routes: Vec<Value> = table
+    let verb = args.http_method.as_ref().map(|v| v.to_uppercase());
+    let prefix = args.path_prefix.as_ref().map(|p| p.to_lowercase());
+
+    let matched: Vec<&crate::route::extractor::RouteEntry> = table
         .routes
         .iter()
-        .filter(|r| match needle {
+        .filter(|r| match needle.as_ref() {
             None => true,
-            Some(ref n) => {
+            Some(n) => {
                 r.path.to_lowercase().contains(n)
                     || r.class.to_lowercase().contains(n)
                     || r.handler.to_lowercase().contains(n)
             }
         })
+        .filter(|r| match verb.as_ref() {
+            None => true,
+            Some(v) => r.http_method.eq_ignore_ascii_case(v),
+        })
+        .filter(|r| match prefix.as_ref() {
+            None => true,
+            Some(p) => r.path.to_lowercase().starts_with(p.as_str()),
+        })
+        .collect();
+
+    let total_matched = matched.len();
+    let offset = args.offset.unwrap_or(0);
+    let limit = args.limit.unwrap_or(usize::MAX).max(1);
+    let window = &matched[offset.min(total_matched)..];
+
+    let routes: Vec<Value> = window
+        .iter()
+        .take(limit)
         .map(|r| {
             json!({
                 "method": r.http_method,
@@ -242,9 +362,11 @@ pub fn list_routes(args: ListRoutesArgs) -> Result<Value, String> {
     Ok(json!({
         "routes": routes,
         "count": routes.len(),
-        // Routes registered with an inline lambda have no named handler, so
-        // they cannot be mapped to a method. Report them: a low mapping rate
-        // should be explainable.
+        // Report the pre-window total so a caller can tell a complete answer
+        // from a page, and knows whether to ask for the next one.
+        "total_matched": total_matched,
+        "offset": offset,
+        "has_more": offset + routes.len() < total_matched,
         "inline_lambda_routes": stats.inline_lambda_routes,
         "files_parsed": stats.files_parsed,
         "files_failed": stats.files_failed,
@@ -258,6 +380,12 @@ pub struct FindPatternsArgs {
     pub path: String,
     /// Minimum confidence to include.
     pub min_confidence: Option<f64>,
+    /// Cap how many detections are listed.
+    #[serde(default)]
+    pub limit: Option<usize>,
+    /// How many detections to skip, for paging.
+    #[serde(default)]
+    pub offset: Option<usize>,
 }
 
 pub fn find_patterns(args: FindPatternsArgs) -> Result<Value, String> {
@@ -302,9 +430,17 @@ pub fn find_patterns(args: FindPatternsArgs) -> Result<Value, String> {
     detections.extend(crate::detect::dotnet::detect_dotnet(&ctx));
 
     let threshold = args.min_confidence.unwrap_or(0.0);
-    let matches: Vec<Value> = detections
+    let qualified: Vec<crate::detect::types::PatternMatch> = detections
         .into_iter()
         .filter(|d| d.confidence >= threshold)
+        .collect();
+    let total_matched = qualified.len();
+    let offset = args.offset.unwrap_or(0);
+    let limit = args.limit.unwrap_or(usize::MAX).max(1);
+    let matches: Vec<Value> = qualified
+        .into_iter()
+        .skip(offset)
+        .take(limit)
         .map(|d| {
             json!({
                 "pattern": format!("{:?}", d.pattern),
@@ -320,6 +456,278 @@ pub fn find_patterns(args: FindPatternsArgs) -> Result<Value, String> {
     Ok(json!({
         "patterns": matches,
         "count": matches.len(),
+        "total_matched": total_matched,
+        "offset": offset,
+        "has_more": offset + matches.len() < total_matched,
+        "parsed_files": project.file_count,
+    }))
+}
+
+// ───────────────────────── diff_impact ─────────────────────────
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct DiffImpactArgs {
+    /// Baseline: the version before the change.
+    pub path_v1: String,
+    /// The version under suspicion.
+    pub path_v2: String,
+    /// Restrict the impact graph to this class. Omit to trace every changed method.
+    #[serde(default)]
+    pub class: Option<String>,
+    /// Restrict the impact graph to this method.
+    #[serde(default)]
+    pub method: Option<String>,
+    /// Report only methods that lost a caller.
+    ///
+    /// This is the regression signal: something that used to call a method no
+    /// longer does, which is what a "worked yesterday, 500 today" incident
+    /// usually comes down to. Defaults to true — the added-caller and
+    /// added-method noise is rarely what you are looking for.
+    #[serde(default)]
+    pub only_lost_callers: Option<bool>,
+    /// Cap how many changes are listed.
+    #[serde(default)]
+    pub limit: Option<usize>,
+}
+
+/// What changed between two versions, and what the change reaches.
+///
+/// The incident-time question is almost always "what did we deploy", and the
+/// signal that carries it is a method losing a caller.
+pub fn diff_impact(args: DiffImpactArgs) -> Result<Value, String> {
+    use crate::analysis::diffimpact::{compute_changes, merge_impact_graphs};
+    use crate::analysis::impact::build_impact_from;
+
+    for path in [&args.path_v1, &args.path_v2] {
+        if !std::path::Path::new(path).exists() {
+            return Err(format!("path does not exist: {path}"));
+        }
+    }
+
+    // Parse each version exactly once. build_diff_impact would parse v2 a second
+    // time inside build_impact_graph, and tracing N changed methods through it
+    // would parse N+1 times — on a 1667-file solution that is seconds per call.
+    // v1's type graph is not needed: the comparison only uses call edges.
+    let (_, cg1) = crate::cli::commands::load_project(std::path::Path::new(&args.path_v1))
+        .map_err(|e| format!("failed to load {}: {e:#}", args.path_v1))?;
+    let (tg2, cg2) = crate::cli::commands::load_project(std::path::Path::new(&args.path_v2))
+        .map_err(|e| format!("failed to load {}: {e:#}", args.path_v2))?;
+    let routes2 = crate::route::extractor::extract(&args.path_v2)
+        .map_err(|e| format!("failed to extract routes from {}: {e:#}", args.path_v2))?;
+
+    let changes = compute_changes(&cg1, &cg2);
+
+    // Split the change set: losing a caller is the actionable part, and
+    // separating it here means the caller can filter without parsing JSON.
+    let mut lost: Vec<Value> = Vec::new();
+    let mut rest: Vec<Value> = Vec::new();
+    for (method, kind) in &changes {
+        let entry = serde_json::to_value(kind).unwrap_or(Value::Null);
+        let mut item = json!({ "method": method, "change": entry });
+        if let crate::analysis::diffimpact::ChangeKind::CallersChanged {
+            removed_callers,
+            added_callers,
+        } = kind
+        {
+            item["lost_callers"] = json!(removed_callers.len());
+            item["gained_callers"] = json!(added_callers.len());
+            if removed_callers.is_empty() {
+                rest.push(item);
+            } else {
+                lost.push(item);
+            }
+        } else {
+            rest.push(item);
+        }
+    }
+    // Most callers lost first: that is the biggest behavioural change.
+    lost.sort_by_key(|v| std::cmp::Reverse(v["lost_callers"].as_u64().unwrap_or(0)));
+
+    let only_lost = args.only_lost_callers.unwrap_or(true);
+    let mut reported = if only_lost {
+        lost.clone()
+    } else {
+        let mut all = lost.clone();
+        all.extend(rest.clone());
+        all
+    };
+    let limit = args.limit.unwrap_or(50).max(1);
+    let truncated = reported.len() > limit;
+    reported.truncate(limit);
+
+    // Impact: the named target, or every changed method that still exists in v2
+    // (a removed method has no callers left to find).
+    let (impact, impact_targets) = match (args.class.as_ref(), args.method.as_ref()) {
+        (Some(class), Some(method)) => {
+            let g = build_impact_from(&tg2, &cg2, &routes2, class, method)
+                .map_err(|e| e.to_string())?;
+            (Some(g), 1usize)
+        }
+        _ => {
+            let v2_methods: std::collections::HashSet<String> = tg2
+                .classes
+                .iter()
+                .flat_map(|(name, info)| {
+                    info.methods
+                        .iter()
+                        .map(move |m| format!("{}.{}", name, m.method))
+                })
+                .collect();
+            let targets: Vec<(String, String)> = changes
+                .keys()
+                .filter(|k| v2_methods.contains(*k))
+                .filter_map(|k| k.split_once('.'))
+                .map(|(c, m)| (c.to_string(), m.to_string()))
+                .take(25)
+                .collect();
+            let graphs: Vec<_> = targets
+                .iter()
+                .filter_map(|(c, m)| build_impact_from(&tg2, &cg2, &routes2, c, m).ok())
+                .collect();
+            let n = graphs.len();
+            if graphs.is_empty() {
+                (None, 0)
+            } else {
+                (Some(merge_impact_graphs(graphs)), n)
+            }
+        }
+    };
+
+    Ok(json!({
+        "changes": reported,
+        "total_changes": changes.len(),
+        "lost_caller_changes": lost.len(),
+        "other_changes": rest.len(),
+        "only_lost_callers": only_lost,
+        "truncated": truncated,
+        "impact": impact.map(|g| json!({
+            "targets": g.target,
+            "affected_methods": g.nodes.len(),
+            "edges": g.edges.len(),
+        })),
+        "impact_targets_traced": impact_targets,
+        // 25 is the cap on traced targets; say so rather than letting a caller
+        // read a partial graph as complete.
+        "impact_capped": impact_targets >= 25,
+    }))
+}
+
+// ───────────────────────── method_callees ─────────────────────────
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct MethodCalleesArgs {
+    pub path: String,
+    pub class: String,
+    pub method: String,
+    /// How many hops to follow (1 = direct callees only).
+    #[serde(default = "default_depth")]
+    pub depth: usize,
+    /// Exclude callees that are not defined in this project (framework calls
+    /// such as `ToString` or EF Core internals).
+    #[serde(default)]
+    pub internal_only: Option<bool>,
+    /// Cap how many callees are listed.
+    #[serde(default)]
+    pub limit: Option<usize>,
+}
+
+fn default_depth() -> usize {
+    1
+}
+
+#[derive(Debug, Serialize)]
+pub struct CalleeInfo {
+    pub method: String,
+    /// True when this project defines the callee.
+    pub internal: bool,
+    pub depth: usize,
+    /// Source lines where the call happens.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub evidence: Vec<usize>,
+}
+
+/// What a method calls, breadth-first.
+///
+/// The complement to `find_callers`: knowing who reaches a method says nothing
+/// about what it then does, which is the other half of "why did this fail".
+pub fn method_callees(args: MethodCalleesArgs) -> Result<Value, String> {
+    let path = Path::new(&args.path);
+    let project = cache::get_or_build(path).map_err(|e| e.to_string())?;
+
+    let start = format!("{}.{}", args.class, args.method);
+    if project
+        .type_graph
+        .classes
+        .get(&args.class)
+        .map(|c| !c.methods.iter().any(|m| m.method == args.method))
+        .unwrap_or(true)
+    {
+        return Err(format!(
+            "method {start} not found; use project_summary or list_routes to find real names"
+        ));
+    }
+
+    let depth = args.depth.clamp(1, 10);
+    let internal_only = args.internal_only.unwrap_or(false);
+
+    let mut out: Vec<CalleeInfo> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    seen.insert(start.clone());
+
+    let mut frontier = vec![(args.class.clone(), args.method.clone(), 1usize)];
+    while let Some((cls, mtd, level)) = frontier.pop() {
+        if level > depth {
+            continue;
+        }
+        let current = format!("{}.{}", cls, mtd);
+        for call in &project.call_graph.calls {
+            if call.caller_class != cls || call.caller_method != mtd {
+                continue;
+            }
+            let (callee_class, _) = crate::analysis::diffimpact::resolve_callee_class(call);
+            let callee_id = format!("{}.{}", callee_class, call.callee);
+            let internal =
+                !callee_class.is_empty() && project.type_graph.classes.contains_key(&callee_class);
+            if internal_only && !internal {
+                continue;
+            }
+            if !seen.insert(callee_id.clone()) {
+                continue;
+            }
+            out.push(CalleeInfo {
+                method: callee_id.clone(),
+                internal,
+                depth: level,
+                evidence: vec![call.line],
+            });
+            if level < depth {
+                if let Some((c_cls, c_mtd)) = callee_id.split_once('.') {
+                    if internal {
+                        frontier.push((c_cls.to_string(), c_mtd.to_string(), level + 1));
+                    }
+                }
+            }
+        }
+        let _ = current;
+    }
+
+    out.sort_by(|a, b| {
+        a.depth
+            .cmp(&b.depth)
+            .then_with(|| a.internal.cmp(&b.internal).reverse())
+            .then_with(|| a.method.cmp(&b.method))
+    });
+
+    let total = out.len();
+    let limit = args.limit.unwrap_or(usize::MAX).max(1);
+    let window: Vec<CalleeInfo> = out.into_iter().take(limit).collect();
+
+    Ok(json!({
+        "method": start,
+        "callees": window,
+        "total_callees": total,
+        "depth": depth,
+        "internal_only": internal_only,
         "parsed_files": project.file_count,
     }))
 }
@@ -371,7 +779,16 @@ pub fn project_summary(args: ProjectSummaryArgs) -> Result<Value, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
+
+    /// Write a source file into a fixture directory, creating subdirectories.
+    fn write(dir: &Path, name: &str, content: &str) {
+        let path = dir.join(name);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(path, content).unwrap();
+    }
 
     fn fixture_dir(name: &str) -> PathBuf {
         let dir =
@@ -402,6 +819,10 @@ public class Svc {
             path: dir.display().to_string(),
             class: "Svc".into(),
             method: "Shared".into(),
+            max_distance: None,
+            exclude_test_projects: None,
+            limit: None,
+            offset: None,
         })
         .expect("find_callers");
         assert_eq!(out["target"], "Svc.Shared");
@@ -490,6 +911,10 @@ api.MapGet("/api/thing/{id:guid}", ThingEndpoint.Handler);
         let out = list_routes(ListRoutesArgs {
             path: dir.display().to_string(),
             filter: None,
+            http_method: None,
+            path_prefix: None,
+            limit: None,
+            offset: None,
         })
         .expect("list_routes");
         assert_eq!(out["count"], 1, "{out}");
@@ -523,6 +948,10 @@ api.MapGet("/api/thing/{id:guid}", ThingEndpoint.Handler);
         let out = list_routes(ListRoutesArgs {
             path: dir.display().to_string(),
             filter: Some("alpha".into()),
+            http_method: None,
+            path_prefix: None,
+            limit: None,
+            offset: None,
         })
         .expect("list_routes");
         assert_eq!(out["count"], 1, "{out}");
@@ -564,6 +993,10 @@ public static class EndpointExtension
             path: dir.display().to_string(),
             class: "GetItemsEndpoint".into(),
             method: "Handler".into(),
+            max_distance: None,
+            exclude_test_projects: None,
+            limit: None,
+            offset: None,
         })
         .expect("find_callers");
 
@@ -613,6 +1046,10 @@ public static class EndpointExtension
             path: dir.display().to_string(),
             class: "Lib".into(),
             method: "Helper".into(),
+            max_distance: None,
+            exclude_test_projects: None,
+            limit: None,
+            offset: None,
         })
         .expect("find_callers");
         assert_eq!(out["routes"].as_array().unwrap().len(), 0, "{out}");
@@ -625,6 +1062,586 @@ public static class EndpointExtension
                 .any(|c| c["method"] == "Lib.Use"),
             "{out}"
         );
+        cache::clear();
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The regression signal: a method that lost a caller between versions.
+    ///
+    /// This is what a "worked yesterday, 500 today" incident reduces to, and it
+    /// is invisible to a plain textual diff because the method itself is
+    /// unchanged — only its callers moved.
+    #[test]
+    fn diff_impact_reports_a_method_that_lost_a_caller() {
+        let v1 = fixture_dir("diff_v1");
+        let v2 = fixture_dir("diff_v2");
+
+        // v1: both callers reach Shared.
+        write(
+            &v1,
+            "Shared.cs",
+            "namespace N;\npublic class Shared { public void Run() {} }\n",
+        );
+        write(
+            &v1,
+            "A.cs",
+            "namespace N;\npublic class A { public void Go() { new Shared().Run(); } }\n",
+        );
+        write(
+            &v1,
+            "B.cs",
+            "namespace N;\npublic class B { public void Go() { new Shared().Run(); } }\n",
+        );
+
+        // v2: B no longer calls it, A adds a new caller C.
+        write(
+            &v2,
+            "Shared.cs",
+            "namespace N;\npublic class Shared { public void Run() {} }\n",
+        );
+        write(
+            &v2,
+            "A.cs",
+            "namespace N;\npublic class A { public void Go() { new Shared().Run(); } }\n",
+        );
+        write(
+            &v2,
+            "B.cs",
+            "namespace N;\npublic class B { public void Go() { } }\n",
+        );
+        write(
+            &v2,
+            "C.cs",
+            "namespace N;\npublic class C { public void Go() { new Shared().Run(); } }\n",
+        );
+
+        let out = diff_impact(DiffImpactArgs {
+            path_v1: v1.display().to_string(),
+            path_v2: v2.display().to_string(),
+            class: None,
+            method: None,
+            only_lost_callers: None,
+            limit: None,
+        })
+        .expect("diff_impact");
+
+        let changes = out["changes"].as_array().expect("changes");
+        let shared = changes
+            .iter()
+            .find(|c| c["method"] == "Shared.Run")
+            .unwrap_or_else(|| panic!("Shared.Run must be reported: {out}"));
+        assert_eq!(shared["lost_callers"], 1, "{shared}");
+        assert_eq!(shared["gained_callers"], 1, "{shared}");
+
+        // The kind must name the actual caller, not just a count.
+        let removed = &shared["change"]["CallersChanged"]["removed_callers"];
+        assert_eq!(removed[0], "B.Go", "{shared}");
+
+        assert!(out["lost_caller_changes"].as_u64().unwrap() >= 1, "{out}");
+        assert!(
+            out["impact"]["affected_methods"].as_u64().unwrap() >= 1,
+            "{out}"
+        );
+
+        std::fs::remove_dir_all(&v1).ok();
+        std::fs::remove_dir_all(&v2).ok();
+    }
+
+    /// `only_lost_callers` defaults to true, so the added-method noise a caller
+    /// does not care about is filtered out of the default response.
+    #[test]
+    fn diff_impact_only_lost_callers_filter_excludes_added_methods() {
+        let v1 = fixture_dir("filter_v1");
+        let v2 = fixture_dir("filter_v2");
+
+        write(
+            &v1,
+            "Keep.cs",
+            "namespace N;\npublic class Keep { public void M() {} }\npublic class K1 { public void G() { Keep.M(); } }\n",
+        );
+        write(
+            &v2,
+            "Keep.cs",
+            "namespace N;\npublic class Keep { public void M() {} }\n",
+        );
+        write(
+            &v2,
+            "Brand.cs",
+            "namespace N;\npublic class Brand { public void M() {} }\npublic class B1 { public void G() { Brand.M(); } }\n",
+        );
+
+        let defaults = diff_impact(DiffImpactArgs {
+            path_v1: v1.display().to_string(),
+            path_v2: v2.display().to_string(),
+            class: None,
+            method: None,
+            only_lost_callers: None,
+            limit: None,
+        })
+        .expect("diff_impact");
+        assert_eq!(defaults["only_lost_callers"], true);
+        assert_eq!(
+            defaults["changes"].as_array().unwrap().len(),
+            0,
+            "{defaults}"
+        );
+
+        let everything = diff_impact(DiffImpactArgs {
+            path_v1: v1.display().to_string(),
+            path_v2: v2.display().to_string(),
+            class: None,
+            method: None,
+            only_lost_callers: Some(false),
+            limit: None,
+        })
+        .expect("diff_impact");
+        assert!(
+            !everything["changes"].as_array().unwrap().is_empty(),
+            "opting out of the filter must show everything: {everything}"
+        );
+
+        std::fs::remove_dir_all(&v1).ok();
+        std::fs::remove_dir_all(&v2).ok();
+    }
+
+    /// Identical versions must report no changes rather than claiming every
+    /// method changed.
+    #[test]
+    fn diff_impact_on_identical_versions_reports_nothing() {
+        let v1 = fixture_dir("same_v1");
+        let v2 = fixture_dir("same_v2");
+        let src = "namespace N;\npublic class S { public void A() {} public void B() { A(); } }\n";
+        write(&v1, "S.cs", src);
+        write(&v2, "S.cs", src);
+
+        let out = diff_impact(DiffImpactArgs {
+            path_v1: v1.display().to_string(),
+            path_v2: v2.display().to_string(),
+            class: None,
+            method: None,
+            only_lost_callers: None,
+            limit: None,
+        })
+        .expect("diff_impact");
+        assert_eq!(out["total_changes"], 0, "{out}");
+
+        std::fs::remove_dir_all(&v1).ok();
+        std::fs::remove_dir_all(&v2).ok();
+    }
+
+    #[test]
+    fn diff_impact_rejects_a_missing_path_with_a_clear_message() {
+        let err = diff_impact(DiffImpactArgs {
+            path_v1: "/nonexistent/version1".into(),
+            path_v2: "/nonexistent/version2".into(),
+            class: None,
+            method: None,
+            only_lost_callers: None,
+            limit: None,
+        })
+        .expect_err("missing path must error");
+        assert!(err.contains("does not exist"), "unhelpful error: {err}");
+    }
+
+    #[test]
+    fn diff_impact_limit_truncates_and_says_so() {
+        let v1 = fixture_dir("limit_v1");
+        let v2 = fixture_dir("limit_v2");
+        write(
+            &v1,
+            "A.cs",
+            "namespace N;\npublic class A { public void M() {} }\npublic class Caller { public void G() { A.M(); } }\n",
+        );
+        for i in 0..8 {
+            write(
+                &v2,
+                &format!("N{i}.cs"),
+                &format!(
+                    "namespace N;\npublic class N{i} {{ public void M() {{}} }}\npublic class C{i} {{ public void G() {{ N{i}.M(); }} }}\n"
+                ),
+            );
+        }
+
+        let out = diff_impact(DiffImpactArgs {
+            path_v1: v1.display().to_string(),
+            path_v2: v2.display().to_string(),
+            class: None,
+            method: None,
+            only_lost_callers: Some(false),
+            limit: Some(3),
+        })
+        .expect("diff_impact");
+        assert_eq!(out["changes"].as_array().unwrap().len(), 3, "{out}");
+        assert_eq!(
+            out["truncated"], true,
+            "a truncated list must say so, or a caller reads it as complete: {out}"
+        );
+        assert!(out["total_changes"].as_u64().unwrap() > 3, "{out}");
+
+        std::fs::remove_dir_all(&v1).ok();
+        std::fs::remove_dir_all(&v2).ok();
+    }
+
+    /// The outbound half of the graph: find_callers says who reaches a method,
+    /// this says what it then does.
+    #[test]
+    fn method_callees_lists_what_a_method_calls() {
+        let dir = fixture_dir("callees");
+        write(
+            &dir,
+            "Svc.cs",
+            r#"
+namespace N;
+public class Repo { public static void Query() {} }
+public class Svc {
+    public void Handle() { Repo.Query(); }
+}
+"#,
+        );
+
+        let out = method_callees(MethodCalleesArgs {
+            path: dir.display().to_string(),
+            class: "Svc".into(),
+            method: "Handle".into(),
+            depth: 1,
+            internal_only: None,
+            limit: None,
+        })
+        .expect("method_callees");
+
+        let callees = out["callees"].as_array().expect("callees");
+        assert!(
+            callees.iter().any(|c| c["method"] == "Repo.Query"),
+            "the internal callee must be reported: {out}"
+        );
+        let repo = callees
+            .iter()
+            .find(|c| c["method"] == "Repo.Query")
+            .unwrap();
+        assert_eq!(repo["internal"], true, "{out}");
+        assert_eq!(repo["depth"], 1, "{out}");
+        // Evidence: the line inside Svc.Handle where the call happens.
+        assert!(!repo["evidence"].as_array().unwrap().is_empty(), "{out}");
+
+        cache::clear();
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// `internal_only` hides framework and third-party callees, which dominate
+    /// a real method's list and bury the project's own code.
+    #[test]
+    fn method_callees_internal_only_hides_unresolved_callees() {
+        let dir = fixture_dir("callees_internal");
+        write(
+            &dir,
+            "Svc.cs",
+            r#"
+namespace N;
+public class Repo { public static void Query() {} }
+public class Svc {
+    public void Handle() { Repo.Query(); var s = ToString(); }
+}
+"#,
+        );
+
+        let all = method_callees(MethodCalleesArgs {
+            path: dir.display().to_string(),
+            class: "Svc".into(),
+            method: "Handle".into(),
+            depth: 1,
+            internal_only: None,
+            limit: None,
+        })
+        .unwrap();
+        let everything = all["callees"].as_array().unwrap();
+        assert!(
+            everything.len() > 1,
+            "the fixture should also produce an unresolved callee: {all}"
+        );
+
+        let internal = method_callees(MethodCalleesArgs {
+            path: dir.display().to_string(),
+            class: "Svc".into(),
+            method: "Handle".into(),
+            depth: 1,
+            internal_only: Some(true),
+            limit: None,
+        })
+        .unwrap();
+        let filtered = internal["callees"].as_array().unwrap();
+        assert!(
+            filtered.iter().all(|c| c["internal"] == true),
+            "internal_only must drop unresolved callees: {internal}"
+        );
+
+        cache::clear();
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Documents a real limit of the resolver, so the behaviour is a decision
+    /// rather than a surprise: a call through a local variable cannot be typed.
+    ///
+    /// `Repo.Query()` resolves; `var r = new Repo(); r.Query()` does not, because
+    /// nothing tracks that `r` is a `Repo`. Such a callee is still reported —
+    /// it is listed with `internal: false` — because a call that exists but
+    /// cannot be attributed is information, and silently dropping it would make a
+    /// method look simpler than it is.
+    #[test]
+    fn method_callees_reports_untypeable_calls_as_external() {
+        let dir = fixture_dir("callees_untyped");
+        write(
+            &dir,
+            "U.cs",
+            r#"
+namespace N;
+public class Repo { public void Query() {} }
+public class Svc {
+    public void Handle() { var r = new Repo(); r.Query(); }
+}
+"#,
+        );
+
+        let out = method_callees(MethodCalleesArgs {
+            path: dir.display().to_string(),
+            class: "Svc".into(),
+            method: "Handle".into(),
+            depth: 1,
+            internal_only: None,
+            limit: None,
+        })
+        .expect("method_callees");
+
+        let callees = out["callees"].as_array().expect("callees");
+        assert!(
+            !callees.is_empty(),
+            "an unresolvable call must still be reported: {out}"
+        );
+        let untyped = callees.iter().find(|c| c["method"] == ".Query").unwrap();
+        assert_eq!(
+            untyped["internal"], false,
+            "a call with no resolvable owner must not claim to be internal: {untyped}"
+        );
+        assert!(
+            !untyped["evidence"].as_array().unwrap().is_empty(),
+            "{untyped}"
+        );
+
+        cache::clear();
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn method_callees_errors_on_an_unknown_method() {
+        let dir = fixture_dir("callees_missing");
+        write(
+            &dir,
+            "Q.cs",
+            "namespace N;\npublic class Q { public void M() {} }\n",
+        );
+
+        let err = method_callees(MethodCalleesArgs {
+            path: dir.display().to_string(),
+            class: "Q".into(),
+            method: "Nope".into(),
+            depth: 1,
+            internal_only: None,
+            limit: None,
+        })
+        .expect_err("unknown method must error");
+        // The error should point at a discovery tool rather than leave the
+        // caller guessing at names.
+        assert!(err.contains("project_summary"), "unhelpful error: {err}");
+
+        cache::clear();
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Paging: without offset/limit a long list is silently cut off and reads as
+    /// complete.
+    #[test]
+    fn list_routes_pages_with_offset_and_limit() {
+        let dir = fixture_dir("routes_page");
+        let mut registration = String::new();
+        for i in 0..6 {
+            write(
+                &dir,
+                &format!("E{i}.cs"),
+                &format!("namespace N;\npublic class E{i}Endpoint {{ public static IResult Handler() => null; }}\n"),
+            );
+            registration.push_str(&format!(
+                "app.MapGet(\"/api/item{i}\", E{i}Endpoint.Handler);\n"
+            ));
+        }
+        write(&dir, "Ext.cs", &registration);
+
+        let first = list_routes(ListRoutesArgs {
+            path: dir.display().to_string(),
+            filter: None,
+            http_method: None,
+            path_prefix: None,
+            limit: Some(2),
+            offset: Some(0),
+        })
+        .expect("list_routes");
+        assert_eq!(first["count"], 2, "{first}");
+        assert_eq!(first["total_matched"], 6, "{first}");
+        assert_eq!(first["has_more"], true, "{first}");
+
+        let last = list_routes(ListRoutesArgs {
+            path: dir.display().to_string(),
+            filter: None,
+            http_method: None,
+            path_prefix: None,
+            limit: Some(2),
+            offset: Some(4),
+        })
+        .expect("list_routes");
+        assert_eq!(last["count"], 2, "{last}");
+        assert_eq!(
+            last["has_more"], false,
+            "the last page must say there is nothing more: {last}"
+        );
+
+        cache::clear();
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn list_routes_filters_by_http_method_and_path_prefix() {
+        let dir = fixture_dir("routes_verb");
+        write(
+            &dir,
+            "A.cs",
+            "namespace N;\npublic class AEndpoint { public static IResult Handler() => null; }\n",
+        );
+        write(
+            &dir,
+            "B.cs",
+            "namespace N;\npublic class BEndpoint { public static IResult Handler() => null; }\n",
+        );
+        write(
+            &dir,
+            "Ext.cs",
+            "app.MapGet(\"/api/agency/member\", AEndpoint.Handler);\napp.MapPost(\"/api/agency/member\", BEndpoint.Handler);\napp.MapGet(\"/api/billing/invoice\", BEndpoint.Handler);\n",
+        );
+
+        let gets = list_routes(ListRoutesArgs {
+            path: dir.display().to_string(),
+            filter: None,
+            http_method: Some("get".into()),
+            path_prefix: None,
+            limit: None,
+            offset: None,
+        })
+        .expect("list_routes");
+        assert_eq!(gets["count"], 2, "{gets}");
+        // Case-insensitive on the verb.
+        for r in gets["routes"].as_array().unwrap() {
+            assert_eq!(r["method"], "GET", "{gets}");
+        }
+
+        let agency = list_routes(ListRoutesArgs {
+            path: dir.display().to_string(),
+            filter: None,
+            http_method: Some("GET".into()),
+            path_prefix: Some("/API/Agency".into()),
+            limit: None,
+            offset: None,
+        })
+        .expect("list_routes");
+        assert_eq!(agency["count"], 1, "{agency}");
+        assert_eq!(agency["routes"][0]["pattern"], "/api/agency/member");
+
+        cache::clear();
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn find_callers_max_distance_keeps_only_direct_callers() {
+        let dir = fixture_dir("distance");
+        write(
+            &dir,
+            "Chain.cs",
+            r#"
+namespace N;
+public class Target { public static void M() {} }
+public class Near { public void G() { Target.M(); } }
+public class Mid { public void G() { Near.G(); } }
+public class Far { public void G() { Mid.G(); } }
+"#,
+        );
+
+        let all = find_callers(FindCallersArgs {
+            path: dir.display().to_string(),
+            class: "Target".into(),
+            method: "M".into(),
+            max_distance: None,
+            exclude_test_projects: None,
+            limit: None,
+            offset: None,
+        })
+        .expect("find_callers");
+        assert!(all["caller_count"].as_u64().unwrap() >= 3, "{all}");
+
+        let direct = find_callers(FindCallersArgs {
+            path: dir.display().to_string(),
+            class: "Target".into(),
+            method: "M".into(),
+            max_distance: Some(1),
+            exclude_test_projects: None,
+            limit: None,
+            offset: None,
+        })
+        .expect("find_callers");
+        assert_eq!(direct["caller_count"], 1, "{direct}");
+        assert_eq!(direct["callers"][0]["method"], "Near.G", "{direct}");
+        // Filtering must not hide that it removed something.
+        assert!(
+            direct["filtered_out"].as_u64().unwrap() > 0,
+            "a filtered response must report what it dropped: {direct}"
+        );
+
+        cache::clear();
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn find_callers_reports_call_sites_as_evidence() {
+        let dir = fixture_dir("evidence");
+        write(
+            &dir,
+            "E.cs",
+            r#"
+namespace N;
+public class Target { public void M() {} }
+public class Caller {
+    public void A() { Target.M(); }
+    public void B() { Target.M(); }
+}
+"#,
+        );
+
+        let out = find_callers(FindCallersArgs {
+            path: dir.display().to_string(),
+            class: "Target".into(),
+            method: "M".into(),
+            max_distance: None,
+            exclude_test_projects: None,
+            limit: None,
+            offset: None,
+        })
+        .expect("find_callers");
+
+        let caller = out["callers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["method"] == "Caller.A" || c["method"] == "Caller.B")
+            .expect("caller present");
+        // Two distinct call sites in the same class, so the evidence has to name
+        // a line — this is what lets an agent open the file at the right place.
+        assert!(!caller["evidence"].as_array().unwrap().is_empty(), "{out}");
+
         cache::clear();
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -672,6 +1689,8 @@ public class Circle : IShape {
         let out = find_patterns(FindPatternsArgs {
             path: dir.display().to_string(),
             min_confidence: None,
+            limit: None,
+            offset: None,
         })
         .expect("find_patterns");
         assert!(out["patterns"].is_array(), "{out}");
@@ -692,11 +1711,15 @@ public class Circle : IShape {
         let all = find_patterns(FindPatternsArgs {
             path: dir.display().to_string(),
             min_confidence: None,
+            limit: None,
+            offset: None,
         })
         .unwrap();
         let strict = find_patterns(FindPatternsArgs {
             path: dir.display().to_string(),
             min_confidence: Some(0.95),
+            limit: None,
+            offset: None,
         })
         .unwrap();
         assert!(

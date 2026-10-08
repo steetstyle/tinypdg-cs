@@ -284,3 +284,198 @@ pub fn impact_to_dot(ig: &ImpactGraph, title: &str) -> String {
     dot.push_str("}\n");
     dot
 }
+
+/// Build an impact graph from an already-parsed project.
+///
+/// Pure: takes the type graph and call graph rather than a path, so a caller
+/// tracing several methods parses the project once instead of once per method.
+/// `build_impact_graph` is the path-based wrapper for the CLI.
+pub fn build_impact_from(
+    tg: &crate::resolve::types::TypeGraph,
+    cg: &crate::analysis::callgraph::CallGraph,
+    routes: &crate::route::extractor::RouteTable,
+    class: &str,
+    method: &str,
+) -> anyhow::Result<ImpactGraph> {
+    let _ = routes;
+    // Verify the target method exists, with the same did-you-mean help the
+    // path-based entry point gives.
+    let method_exists = tg
+        .classes
+        .get(class)
+        .map(|c| c.methods.iter().any(|m| m.method == method))
+        .unwrap_or(false);
+
+    if !method_exists {
+        let candidates: Vec<String> = tg
+            .classes
+            .iter()
+            .filter(|(cn, ci)| {
+                cn.to_lowercase() == class.to_lowercase()
+                    && ci
+                        .methods
+                        .iter()
+                        .any(|m| m.method.to_lowercase() == method.to_lowercase())
+            })
+            .map(|(cn, _)| cn.clone())
+            .collect();
+        if candidates.len() == 1 {
+            let actual_class = &candidates[0];
+            let actual_method = tg.classes[actual_class]
+                .methods
+                .iter()
+                .find(|m| m.method.to_lowercase() == method.to_lowercase())
+                .map(|m| m.method.clone())
+                .unwrap();
+            anyhow::bail!(
+                "Method '{}' not found in '{}'. Did you mean '{}' in '{}'?",
+                method,
+                class,
+                actual_method,
+                actual_class
+            );
+        }
+        if !candidates.is_empty() {
+            anyhow::bail!(
+                "Method '{}' not found in class '{}'. Candidates: {}",
+                method,
+                class,
+                candidates.join(", ")
+            );
+        }
+        anyhow::bail!("Method '{}' not found in class '{}'", method, class);
+    }
+
+    // Routes bound to the target. A minimal-API handler is reached by a method
+    // group reference (`MapGet("/x", Type.Handler)`), which is not a call site,
+    // so its registration site has to be seeded as a caller BEFORE the walk
+    // starts. Seeding it afterwards leaves it unprocessed: the BFS has already
+    // finished by then, which silently reported zero callers for every endpoint.
+    let (routes_bound, route_callers) = routes_for_target_from(routes, class, method);
+    let target_key = format!("{}.{}", class, method);
+
+    let mut nodes: BTreeMap<String, (usize, usize)> = BTreeMap::new();
+    let mut edges: Vec<(String, String)> = Vec::new();
+    let mut visited: HashSet<(String, String)> = HashSet::new();
+    let mut queue: Vec<(String, String)> = Vec::new();
+
+    for registrar in &route_callers {
+        edges.push((registrar.clone(), target_key.clone()));
+        if let Some((c_cls, c_mtd)) = registrar.split_once('.') {
+            let key = (c_cls.to_string(), c_mtd.to_string());
+            if visited.insert(key.clone()) {
+                queue.push(key);
+            }
+        }
+    }
+    nodes.insert(target_key.clone(), (route_callers.len(), 0));
+
+    visited.insert((class.to_string(), method.to_string()));
+    queue.push((class.to_string(), method.to_string()));
+
+    while let Some((cls, mtd)) = queue.pop() {
+        let direct_callers: Vec<&crate::analysis::callgraph::CallSite> = cg
+            .calls
+            .iter()
+            .filter(|c| c.callee == mtd && c.callee_class == cls)
+            .collect();
+        let call_count = direct_callers.len();
+        let node_id = format!("{}.{}", cls, mtd);
+        nodes
+            .entry(node_id.clone())
+            .and_modify(|(_, c)| {
+                if call_count > *c {
+                    *c = call_count;
+                }
+            })
+            .or_insert((call_count, 0));
+
+        for call in &direct_callers {
+            let caller_id = format!("{}.{}", call.caller_class, call.caller_method);
+            edges.push((caller_id, node_id.clone()));
+            let caller_key = (call.caller_class.clone(), call.caller_method.clone());
+            if visited.insert(caller_key.clone()) {
+                queue.push(caller_key);
+            }
+        }
+    }
+
+    let mut incoming: HashMap<String, Vec<String>> = HashMap::new();
+    for (caller, callee) in &edges {
+        incoming
+            .entry(callee.clone())
+            .or_default()
+            .push(caller.clone());
+    }
+
+    fn compute_transitive(
+        node: &str,
+        incoming: &HashMap<String, Vec<String>>,
+        cache: &mut HashMap<String, usize>,
+    ) -> usize {
+        if let Some(&cached) = cache.get(node) {
+            return cached;
+        }
+        let mut total = 0;
+        if let Some(callers) = incoming.get(node) {
+            for caller in callers {
+                total += 1;
+                total += compute_transitive(caller, incoming, cache);
+            }
+        }
+        cache.insert(node.to_string(), total);
+        total
+    }
+
+    let mut cache = HashMap::new();
+    let node_ids: Vec<String> = nodes.keys().cloned().collect();
+    for node_id in &node_ids {
+        let t = compute_transitive(node_id, &incoming, &mut cache);
+        if let Some(entry) = nodes.get_mut(node_id) {
+            entry.1 = t;
+        }
+    }
+
+    let mut edge_set: HashSet<(String, String)> = HashSet::new();
+    edges.retain(|e| edge_set.insert(e.clone()));
+
+    Ok(ImpactGraph {
+        nodes,
+        edges,
+        target: format!("{}.{}", class, method),
+        routes: routes_bound,
+    })
+}
+
+/// Routes bound to `class.method`, plus their registration sites, from an
+/// already-extracted route table.
+fn routes_for_target_from(
+    table: &crate::route::extractor::RouteTable,
+    class: &str,
+    method: &str,
+) -> (Vec<RouteBinding>, Vec<String>) {
+    let class_lower = class.to_lowercase();
+    let mut bindings = Vec::new();
+    let mut registrars: Vec<String> = Vec::new();
+    for entry in &table.routes {
+        if entry.class.to_lowercase() != class_lower || entry.handler != method {
+            continue;
+        }
+        if let Some(ref registrar) = entry.registrar {
+            if !registrars.contains(registrar) {
+                registrars.push(registrar.clone());
+            }
+        }
+        bindings.push(RouteBinding {
+            http_method: entry.http_method.clone(),
+            pattern: entry.path.clone(),
+            registrar: entry.registrar.clone(),
+        });
+    }
+    bindings.sort_by(|a, b| {
+        a.http_method
+            .cmp(&b.http_method)
+            .then_with(|| a.pattern.cmp(&b.pattern))
+    });
+    (bindings, registrars)
+}

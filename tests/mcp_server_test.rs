@@ -120,7 +120,7 @@ const FIXTURE: &[(&str, &str)] = &[
 ];
 
 #[test]
-fn handshake_advertises_five_read_only_tools() {
+fn handshake_advertises_the_read_only_tools() {
     let mut mcp = McpProcess::start();
 
     let init = mcp.send(
@@ -152,7 +152,7 @@ fn handshake_advertises_five_read_only_tools() {
     ] {
         assert!(names.contains(&expected), "missing {expected} in {names:?}");
     }
-    assert_eq!(tools.len(), 5, "unexpected tool set: {names:?}");
+    assert_eq!(tools.len(), 7, "unexpected tool set: {names:?}");
 
     // An agent decides when to call a tool from its description, so an empty
     // one makes the tool unreachable in practice.

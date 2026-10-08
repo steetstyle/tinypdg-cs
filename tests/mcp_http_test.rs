@@ -232,10 +232,12 @@ async fn tools_are_callable_over_http() {
         "find_callers",
         "method_pdg",
         "find_patterns",
+        "diff_impact",
+        "method_callees",
     ] {
         assert!(names.contains(&expected), "missing {expected} in {names:?}");
     }
-    assert_eq!(names.len(), 5, "{names:?}");
+    assert_eq!(names.len(), 7, "{names:?}");
 
     std::fs::remove_dir_all(&dir).ok();
 }
@@ -326,7 +328,7 @@ async fn sdk_client_can_drive_the_http_server() {
 
     let tools = client.list_all_tools().await.expect("list tools");
     let names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
-    assert_eq!(names.len(), 5, "{names:?}");
+    assert_eq!(names.len(), 7, "{names:?}");
     assert!(names.contains(&"list_routes"), "{names:?}");
 
     client.cancel().await.ok();
