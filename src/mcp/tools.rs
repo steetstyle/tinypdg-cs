@@ -318,8 +318,15 @@ pub fn method_hammocks(args: MethodHammocksArgs) -> Result<Value, String> {
     }
 
     // Outermost first, so a parent always appears before its children.
-    let regions: Vec<((usize, usize), (usize, NodeIndex, NodeIndex))> =
+    //
+    // The `Reverse` is what does it. The map iterates by `(start, end)` ascending, and
+    // two regions sharing a start line are nested with the *wider* one outside, so
+    // ascending `end` would emit the child first — and a reader attaching depth on one
+    // pass, or a traversal walking down without backtracking, would meet a parent id
+    // that had not been seen yet.
+    let mut regions: Vec<((usize, usize), (usize, NodeIndex, NodeIndex))> =
         widest.into_iter().collect();
+    regions.sort_by_key(|((s, e), _)| (*s, std::cmp::Reverse(*e)));
 
     let count = regions.len();
     let out: Vec<HammockRegion> = regions
@@ -1926,6 +1933,91 @@ public class Circle : IShape {
             strict["count"].as_u64().unwrap() <= all["count"].as_u64().unwrap(),
             "higher threshold must not return more patterns"
         );
+        cache::clear();
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The forest has to be readable in one pass: a parent before its children.
+    ///
+    /// Two regions can start on the same line, and when they do the wider one contains
+    /// the narrower. Ordering by `(start, end)` ascending therefore emits the child
+    /// first, and a reader that attaches depth as it goes — or a traversal that walks
+    /// down and later walks back up — meets a parent id it has not seen yet.
+    #[test]
+    fn a_parent_is_always_listed_before_its_children() {
+        let _guard = cache::test_guard();
+        let dir = std::env::temp_dir().join("tiny_pdg_hammock_order");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // Two nested regions sharing a start line: the guard is on line 20, and both the
+        // `if` it belongs to and its body start there.
+        std::fs::write(
+            dir.join("Endpoint.cs"),
+            "namespace N;
+public class Endpoint
+{
+    public static void Handler(int id)
+    {
+        if (id == 0)
+        {
+            throw new ArgumentException();
+        }
+        while (id > 0)
+        {
+            id--;
+        }
+    }
+}
+",
+        )
+        .unwrap();
+
+        let value = super::method_hammocks(MethodHammocksArgs {
+            path: dir.display().to_string(),
+            class: "Endpoint".into(),
+            method: "Handler".into(),
+            file: None,
+            min_blocks: None,
+        })
+        .unwrap();
+
+        let regions = value["regions"].as_array().expect("regions");
+        assert!(regions.len() >= 2, "the fixture nests: {value}");
+
+        let seen: std::collections::HashSet<&str> =
+            regions.iter().map(|r| r["id"].as_str().unwrap()).collect();
+
+        for region in regions {
+            match region["parent_id"].as_str() {
+                None => assert_eq!(region["depth"], 0, "{region}"),
+                Some(parent) => {
+                    assert!(
+                        seen.contains(parent),
+                        "{parent} is referenced but never listed"
+                    );
+                    // The whole point: the parent was already emitted.
+                    let parent_index = regions
+                        .iter()
+                        .position(|r| r["id"].as_str() == Some(parent))
+                        .expect("listed");
+                    let own_index = regions
+                        .iter()
+                        .position(|r| r["id"] == region["id"])
+                        .expect("listed");
+                    assert!(
+                        parent_index < own_index,
+                        "{} at {own_index} is listed before its parent {} at {parent_index}",
+                        region["id"],
+                        parent
+                    );
+                    assert_eq!(
+                        region["depth"].as_u64(),
+                        Some(region["depth"].as_u64().unwrap().max(1))
+                    );
+                }
+            }
+        }
+
         cache::clear();
         std::fs::remove_dir_all(&dir).ok();
     }
