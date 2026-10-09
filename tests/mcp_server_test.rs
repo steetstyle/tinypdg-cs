@@ -149,10 +149,11 @@ fn handshake_advertises_the_read_only_tools() {
         "find_callers",
         "method_pdg",
         "find_patterns",
+        "method_hammocks",
     ] {
         assert!(names.contains(&expected), "missing {expected} in {names:?}");
     }
-    assert_eq!(tools.len(), 7, "unexpected tool set: {names:?}");
+    assert_eq!(tools.len(), 8, "unexpected tool set: {names:?}");
 
     // An agent decides when to call a tool from its description, so an empty
     // one makes the tool unreachable in practice.

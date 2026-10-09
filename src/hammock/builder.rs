@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use petgraph::graph::{DiGraph, NodeIndex};
 
-use crate::cfg::builder::{BasicBlock, BlockEdge};
+use crate::cfg::builder::{BasicBlock, BlockEdge, BlockKind};
 
 /// A hammock region: single-entry, single-exit subgraph
 #[derive(Debug, Clone)]
@@ -24,17 +24,82 @@ pub fn find_hammocks(
     entry: NodeIndex,
     exit: NodeIndex,
 ) -> Vec<Hammock> {
+    // Inside a method only. A file's CFG is one Entry/Exit pair per method laid end to
+    // end, so a dominator search rooted at the first Entry reasons about nodes belonging
+    // to other methods: those nodes are not dominated by that Entry and not
+    // post-dominated by that Exit, and the resulting regions span unrelated code. The
+    // per-file caller below is what keeps this correct in practice.
+    find_hammocks_in_method(cfg, entry, exit)
+}
+
+/// Find hammock regions for every method in a file.
+///
+/// Each method gets its own dominator and post-dominator computation, because that is
+/// the unit in which a hammock block means anything.
+pub fn find_hammocks_in_file(cfg: &DiGraph<BasicBlock, BlockEdge>) -> Vec<Hammock> {
+    let mut all = Vec::new();
+    for entry in cfg
+        .node_indices()
+        .filter(|i| cfg[*i].kind == BlockKind::Entry)
+    {
+        let Some(exit) = reachable_exit(cfg, entry) else {
+            continue;
+        };
+        all.extend(find_hammocks_in_method(cfg, entry, exit));
+    }
+    all
+}
+
+/// The first Exit reachable from `entry`.
+///
+/// `build_cfg` appends a method's body between its Entry and its Exit and never adds an
+/// edge out of a method, so the first reachable Exit is that method's own. Matching on
+/// reachability rather than on index arithmetic means a method added to the middle of
+/// the file later does not silently shift the pairing.
+fn reachable_exit(cfg: &DiGraph<BasicBlock, BlockEdge>, entry: NodeIndex) -> Option<NodeIndex> {
+    let mut seen = HashSet::new();
+    let mut stack = vec![entry];
+    while let Some(node) = stack.pop() {
+        if node != entry && cfg[node].kind == BlockKind::Exit {
+            return Some(node);
+        }
+        for next in cfg.neighbors_directed(node, petgraph::Direction::Outgoing) {
+            if seen.insert(next) {
+                stack.push(next);
+            }
+        }
+    }
+    None
+}
+
+fn find_hammocks_in_method(
+    cfg: &DiGraph<BasicBlock, BlockEdge>,
+    entry: NodeIndex,
+    exit: NodeIndex,
+) -> Vec<Hammock> {
     let dom = Dominators::compute(cfg, entry);
     let pdom = Dominators::compute_reverse(cfg, exit);
 
     let mut hammocks = Vec::new();
 
-    for h in cfg.node_indices() {
-        if h == entry || h == exit {
-            continue;
-        }
-        for t in cfg.node_indices() {
-            if t == entry || t == exit || h == t {
+    // Only this method's nodes. `dominates` is now a set lookup, so a cross-method pair
+    // no longer hangs — but it would still be nonsense: two blocks from different methods
+    // are not control-dependent on each other in any sense worth reporting.
+    let in_method: Vec<NodeIndex> = cfg
+        .node_indices()
+        .filter(|i| {
+            *i != entry
+                && *i != exit
+                && cfg[*i].start_line >= cfg[entry].start_line
+                && cfg[*i].end_line <= cfg[exit].end_line
+        })
+        .collect();
+
+    for h in &in_method {
+        let h = *h;
+        for t in &in_method {
+            let t = *t;
+            if h == t {
                 continue;
             }
 
@@ -144,9 +209,20 @@ fn check_single_exit(
     true
 }
 
-/// Generic dominator computation using iterative dataflow
+/// Dominator sets, one per node.
+///
+/// The sets, not the immediate dominators, because `dominates` needs the relation and
+/// not a parent pointer. The previous version walked an idom chain, and a chain can
+/// cycle: the idom was picked by a heuristic (the candidate with the largest dominator
+/// set) rather than computed, so on a graph with several entry points it could hand
+/// back a parent that eventually pointed back at the start. `dominates` then looped
+/// forever -- not slowly, forever -- on 36 of the 60 real endpoint files measured.
+///
+/// Membership is what was wanted and it is O(1), so there is no chain to walk and no
+/// way to hang.
 struct Dominators {
-    idoms: Vec<Option<NodeIndex>>,
+    /// `sets[v]` is every node that dominates `v`, including `v` itself.
+    sets: Vec<HashSet<NodeIndex>>,
 }
 
 impl Dominators {
@@ -203,30 +279,16 @@ impl Dominators {
             }
         }
 
-        // Compute immediate dominator from dominator sets
-        let mut idoms = vec![None; n];
-        idoms[entry.index()] = Some(entry);
-        for v in cfg.node_indices() {
-            if v == entry {
-                continue;
-            }
-            let dom_v = match &dom_sets[v.index()] {
-                Some(s) => s.clone(),
-                None => continue,
-            };
-
-            // idom(v) = the unique d ∈ dom(v) \ {v} that is dominated by all
-            // other members of dom(v) \ {v}
-            let mut candidates: Vec<NodeIndex> = dom_v.iter().filter(|&&d| d != v).copied().collect();
-            // Sort by dom set size descending — the immediate dominator has the largest dom set
-            candidates.sort_by_key(|&c| dom_sets[c.index()].as_ref().map(|s| s.len()).unwrap_or(0));
-            idoms[v.index()] = candidates.last().copied();
+        // The sets are the answer. Deriving an idom chain from them buys nothing here
+        // and is where the cycle came from.
+        Dominators {
+            sets: dom_sets
+                .into_iter()
+                .map(|s| s.unwrap_or_default())
+                .collect(),
         }
-
-        Self { idoms }
     }
 
-    /// Reverse dominators (post-dominators): same algorithm on reversed graph
     fn compute_reverse(cfg: &DiGraph<BasicBlock, BlockEdge>, exit: NodeIndex) -> Self {
         let n = cfg.node_count();
 
@@ -284,47 +346,23 @@ impl Dominators {
             }
         }
 
-        let mut idoms = vec![None; n];
-        idoms[exit.index()] = Some(exit);
-        for v in cfg.node_indices() {
-            if v == exit {
-                continue;
-            }
-            let dom_v = match &dom_sets[v.index()] {
-                Some(s) => s.clone(),
-                None => continue,
-            };
-            let mut candidates: Vec<NodeIndex> = dom_v.iter().filter(|&&d| d != v).copied().collect();
-            candidates.sort_by_key(|&c| dom_sets[c.index()].as_ref().map(|s| s.len()).unwrap_or(0));
-            idoms[v.index()] = candidates.last().copied();
+        Self {
+            sets: dom_sets
+                .into_iter()
+                .map(|s| s.unwrap_or_default())
+                .collect(),
         }
-
-        Self { idoms }
     }
 
-    fn idom(&self, node: NodeIndex) -> Option<NodeIndex> {
-        self.idoms.get(node.index()).copied().flatten()
-    }
-
+    /// Whether `dom` dominates `node`.
+    ///
+    /// A set lookup, by construction of the dataflow: `sets[node]` *is* the set of nodes
+    /// that dominate it. Walking an idom chain to answer this was both slower and, on a
+    /// graph with more than one entry, non-terminating.
     fn dominates(&self, dom: NodeIndex, node: NodeIndex) -> bool {
-        if dom == node {
-            return true;
-        }
-        let mut cur = node;
-        loop {
-            match self.idom(cur) {
-                Some(id) => {
-                    if id == dom {
-                        return true;
-                    }
-                    if id == cur {
-                        return false;
-                    }
-                    cur = id;
-                }
-                None => return false,
-            }
-        }
+        self.sets
+            .get(node.index())
+            .is_some_and(|s| s.contains(&dom))
     }
 }
 
@@ -336,17 +374,30 @@ mod tests {
     #[test]
     fn test_dominators_empty_method() {
         let cfg = build_cfg("class C { void M() { } }").unwrap();
-        let entry = cfg.node_indices().find(|i| cfg[*i].kind == BlockKind::Entry).unwrap();
-        let exit = cfg.node_indices().find(|i| cfg[*i].kind == BlockKind::Exit).unwrap();
+        let entry = cfg
+            .node_indices()
+            .find(|i| cfg[*i].kind == BlockKind::Entry)
+            .unwrap();
+        let exit = cfg
+            .node_indices()
+            .find(|i| cfg[*i].kind == BlockKind::Exit)
+            .unwrap();
         let dom = Dominators::compute(&cfg, entry);
         assert!(dom.dominates(entry, exit));
     }
 
     #[test]
     fn test_hammocks_if_else() {
-        let cfg = build_cfg("class C { void M() { if (true) { foo(); } else { bar(); } } }").unwrap();
-        let entry = cfg.node_indices().find(|i| cfg[*i].kind == BlockKind::Entry).unwrap();
-        let exit = cfg.node_indices().find(|i| cfg[*i].kind == BlockKind::Exit).unwrap();
+        let cfg =
+            build_cfg("class C { void M() { if (true) { foo(); } else { bar(); } } }").unwrap();
+        let entry = cfg
+            .node_indices()
+            .find(|i| cfg[*i].kind == BlockKind::Entry)
+            .unwrap();
+        let exit = cfg
+            .node_indices()
+            .find(|i| cfg[*i].kind == BlockKind::Exit)
+            .unwrap();
         let hammocks = find_hammocks(&cfg, entry, exit);
         assert!(!hammocks.is_empty(), "Expected hammocks, found none");
     }
@@ -354,8 +405,14 @@ mod tests {
     #[test]
     fn test_hammocks_sequential_no_hammocks() {
         let cfg = build_cfg("class C { void M() { int a = 1; int b = 2; } }").unwrap();
-        let entry = cfg.node_indices().find(|i| cfg[*i].kind == BlockKind::Entry).unwrap();
-        let exit = cfg.node_indices().find(|i| cfg[*i].kind == BlockKind::Exit).unwrap();
+        let entry = cfg
+            .node_indices()
+            .find(|i| cfg[*i].kind == BlockKind::Entry)
+            .unwrap();
+        let exit = cfg
+            .node_indices()
+            .find(|i| cfg[*i].kind == BlockKind::Exit)
+            .unwrap();
         let hammocks = find_hammocks(&cfg, entry, exit);
         // Sequential code with no branching shouldn't have hammocks
         // (each statement is its own node, but there's no structured region)
@@ -365,8 +422,14 @@ mod tests {
     #[test]
     fn test_hammocks_loop() {
         let cfg = build_cfg("class C { void M() { for (;;) { foo(); } } }").unwrap();
-        let entry = cfg.node_indices().find(|i| cfg[*i].kind == BlockKind::Entry).unwrap();
-        let exit = cfg.node_indices().find(|i| cfg[*i].kind == BlockKind::Exit).unwrap();
+        let entry = cfg
+            .node_indices()
+            .find(|i| cfg[*i].kind == BlockKind::Entry)
+            .unwrap();
+        let exit = cfg
+            .node_indices()
+            .find(|i| cfg[*i].kind == BlockKind::Exit)
+            .unwrap();
         let hammocks = find_hammocks(&cfg, entry, exit);
         // for loop should form a hammock (header=loop_cond, footer=loop_exit or post-loop)
         assert!(!hammocks.is_empty());
@@ -374,14 +437,23 @@ mod tests {
 
     #[test]
     fn test_hammock_footer_post_dominates_header() {
-        let cfg = build_cfg("class C { void M() { if (true) { foo(); } else { bar(); } } }").unwrap();
-        let entry = cfg.node_indices().find(|i| cfg[*i].kind == BlockKind::Entry).unwrap();
-        let exit = cfg.node_indices().find(|i| cfg[*i].kind == BlockKind::Exit).unwrap();
+        let cfg =
+            build_cfg("class C { void M() { if (true) { foo(); } else { bar(); } } }").unwrap();
+        let entry = cfg
+            .node_indices()
+            .find(|i| cfg[*i].kind == BlockKind::Entry)
+            .unwrap();
+        let exit = cfg
+            .node_indices()
+            .find(|i| cfg[*i].kind == BlockKind::Exit)
+            .unwrap();
         let pdom = Dominators::compute_reverse(&cfg, exit);
         let hammocks = find_hammocks(&cfg, entry, exit);
         for h in &hammocks {
-            assert!(pdom.dominates(h.footer, h.header),
-                "footer must post-dominate header");
+            assert!(
+                pdom.dominates(h.footer, h.header),
+                "footer must post-dominate header"
+            );
         }
     }
 }

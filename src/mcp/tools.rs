@@ -4,8 +4,10 @@
 //! DOT to use it, which wastes tokens and invites mistakes; the DOT renderers
 //! in `cli::commands` stay for humans.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 
+use petgraph::graph::NodeIndex;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -201,6 +203,204 @@ pub struct PdgLink {
     pub to: usize,
     /// `control`, `data`, or `cfg:<kind>`.
     pub kind: String,
+}
+
+/// Arguments for the hammock-block view of a method.
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct MethodHammocksArgs {
+    pub path: String,
+    pub class: String,
+    pub method: String,
+    /// Restrict to one file, for methods declared in more than one place.
+    #[serde(default)]
+    pub file: Option<String>,
+    /// Report only regions that contain at least this many blocks.
+    ///
+    /// 2 is the definition's own floor. Raising it is how you get the handful of
+    /// structured regions rather than every adjacent pair of statements.
+    #[serde(default)]
+    pub min_blocks: Option<usize>,
+}
+
+/// One hammock block, with the parent that makes a traversal walk possible.
+#[derive(Debug, Serialize)]
+pub struct HammockRegion {
+    /// Stable within one response; quote it back to traverse.
+    pub id: String,
+    /// The enclosing region's id, or null at the outermost level.
+    pub parent_id: Option<String>,
+    /// How many blocks deep from the outermost region of this method.
+    pub depth: usize,
+    pub kind: String,
+    pub start_line: usize,
+    pub end_line: usize,
+    pub blocks: usize,
+    pub header_kind: String,
+    pub footer_kind: String,
+}
+
+/// The hammock blocks of one method, as a containment forest.
+///
+/// Hammock blocks (Johnson '94) restructure a method into single-entry-single-exit
+/// regions, and nest: a loop body inside a conditional inside a method. That nesting is
+/// the point. It is what lets an agent move between module, class, function and
+/// statement granularity in one pass, choosing the level that is most informative for
+/// the symptom in front of it, instead of reasoning over one flattened graph.
+///
+/// Which is why this is a forest with named nodes and parents rather than a list: a
+/// traversal that can only go "down" has no way to zoom out after it has gone too deep.
+pub fn method_hammocks(args: MethodHammocksArgs) -> Result<Value, String> {
+    let project = cache::get_or_build(Path::new(&args.path)).map_err(|e| e.to_string())?;
+
+    let method = project
+        .type_graph
+        .classes
+        .get(&args.class)
+        .and_then(|c| c.methods.iter().find(|m| m.method == args.method))
+        .ok_or_else(|| {
+            format!(
+                "method {}.{} not found; classes include {:?}",
+                args.class,
+                args.method,
+                project
+                    .type_graph
+                    .classes
+                    .keys()
+                    .take(5)
+                    .collect::<Vec<_>>()
+            )
+        })?;
+
+    if let Some(ref want) = args.file {
+        if !method.file.ends_with(want.as_str()) {
+            return Err(format!(
+                "{} found in {}, but --file {} was requested",
+                args.method, method.file, want
+            ));
+        }
+    }
+
+    let source = std::fs::read_to_string(&method.file)
+        .map_err(|e| format!("read {}: {}", method.file, e))?;
+    let cfg = crate::cfg::builder::build_cfg(&source).map_err(|e| e.to_string())?;
+
+    // Per file, then narrowed to this method by line span. Regions are computed per
+    // method inside find_hammocks_in_file; a method's own Entry and Exit bound it.
+    let all = crate::hammock::builder::find_hammocks_in_file(&cfg);
+    let (start, end) = (method.line_start, method.line_end);
+
+    let min_blocks = args.min_blocks.unwrap_or(2);
+
+    // One region per line span, keeping the widest body found for it.
+    //
+    // Two blocks often share a span -- the Entry block and the first statement both start
+    // on the method's line -- so distinct hammock headers can map to the same span and
+    // report the same region several times. Keying on the span is what makes the result a
+    // forest: with the node identity kept, several entries would each be "the parent" of
+    // the same child and the hierarchy would be ambiguous.
+    let mut widest: BTreeMap<(usize, usize), (usize, NodeIndex, NodeIndex)> = BTreeMap::new();
+    for hammock in &all {
+        let header = &cfg[hammock.header];
+        let footer = &cfg[hammock.footer];
+        if header.start_line < start || footer.end_line > end {
+            continue;
+        }
+        if hammock.body.len() < min_blocks {
+            continue;
+        }
+        let span = (header.start_line, footer.end_line);
+        let entry = widest
+            .entry(span)
+            .or_insert((0, hammock.header, hammock.footer));
+        if hammock.body.len() > entry.0 {
+            *entry = (hammock.body.len(), hammock.header, hammock.footer);
+        }
+    }
+
+    // Outermost first, so a parent always appears before its children.
+    let regions: Vec<((usize, usize), (usize, NodeIndex, NodeIndex))> =
+        widest.into_iter().collect();
+
+    let count = regions.len();
+    let out: Vec<HammockRegion> = regions
+        .iter()
+        .enumerate()
+        .map(|(i, ((s, e), (blocks, header, footer)))| {
+            // Regions that strictly contain this one. Strict means a different span, so
+            // two regions sharing a span overlap rather than nest and neither becomes
+            // the other's parent.
+            let enclosing: Vec<usize> = regions
+                .iter()
+                .enumerate()
+                .filter(|(j, ((ps, pe), _))| *j != i && ps <= s && pe >= e && (ps, pe) != (s, e))
+                .map(|(j, _)| j)
+                .collect();
+
+            // The parent is the *tightest* enclosing region: the narrowest span, which is
+            // what "immediate" means here.
+            let parent_index = enclosing.iter().copied().min_by_key(|j| {
+                let ((ps, pe), _) = regions[*j];
+                (pe - ps, *j)
+            });
+
+            // Depth from the parent chain, not from a direct count of enclosing spans:
+            // counting every enclosing span would say a region whose ancestor has an equal
+            // span is deeper than its own parent reports.
+            let parents: Vec<Option<usize>> = regions
+                .iter()
+                .enumerate()
+                .map(|(i, ((s, e), _))| {
+                    regions
+                        .iter()
+                        .enumerate()
+                        .filter(|(j, ((ps, pe), _))| {
+                            *j != i && ps <= s && pe >= e && (ps, pe) != (s, e)
+                        })
+                        .map(|(j, ((ps, pe), _))| (pe - ps, j))
+                        .min()
+                        .map(|(_, j)| j)
+                })
+                .collect();
+
+            let mut depth = 0;
+            let mut cursor = parents[i];
+            // Parents are strictly wider, so the chain ends; the bound is a guard against
+            // a future change that breaks that, not a normal exit.
+            while let Some(p) = cursor {
+                depth += 1;
+                cursor = parents[p];
+                if depth > regions.len() {
+                    break;
+                }
+            }
+
+            HammockRegion {
+                id: format!("h{i}"),
+                parent_id: parent_index.map(|j| format!("h{j}")),
+                depth,
+                kind: format!("{:?}", cfg[*header].kind),
+                start_line: *s,
+                end_line: *e,
+                blocks: *blocks,
+                header_kind: format!("{:?}", cfg[*header].kind),
+                footer_kind: format!("{:?}", cfg[*footer].kind),
+            }
+        })
+        .collect();
+
+    Ok(serde_json::json!({
+        "class": args.class,
+        "method": args.method,
+        "file": method.file,
+        "granularity": "hammock blocks (single-entry, single-exit regions), nested",
+        "region_count": count,
+        "min_blocks": min_blocks,
+        "regions": out,
+        "how_to_use": "Each region names its parent, so a traversal can move up to a wider \
+                       region with Expand and out to an adjacent one with Relate. Regions \
+                       are ordered outermost first, and a parent always appears before its \
+                       children.",
+    }))
 }
 
 pub fn method_pdg(args: MethodPdgArgs) -> Result<Value, String> {

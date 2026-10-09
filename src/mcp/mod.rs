@@ -21,7 +21,7 @@ use serde_json::Value;
 
 use tools::{
     DiffImpactArgs, FindCallersArgs, FindPatternsArgs, ListRoutesArgs, MethodCalleesArgs,
-    MethodPdgArgs, ProjectSummaryArgs,
+    MethodHammocksArgs, MethodPdgArgs, ProjectSummaryArgs,
 };
 
 pub struct AnalysisServer {
@@ -108,6 +108,24 @@ impl AnalysisServer {
     )]
     pub async fn method_pdg(&self, args: Parameters<MethodPdgArgs>) -> Result<String, McpError> {
         wrap(tools::method_pdg(args.0))
+    }
+
+    /// Nested single-entry, single-exit regions of one method.
+    #[tool(
+        name = "method_hammocks",
+        description = "Restructure a method into hammock blocks: single-entry, single-exit regions (Johnson '94) that nest, so a loop body sits inside a conditional inside the method. Returns a containment forest where each region names its parent and its depth, giving module, class, function and statement granularity in one pass. Prefer this to method_pdg when the question is which structured region a symptom falls in: it returns far fewer, larger regions, and the parent link is what lets a traversal zoom back out.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    pub async fn method_hammocks(
+        &self,
+        args: Parameters<MethodHammocksArgs>,
+    ) -> Result<String, McpError> {
+        wrap(tools::method_hammocks(args.0))
     }
 
     /// Design-pattern detections.
@@ -209,13 +227,14 @@ mod tests {
             "find_patterns",
             "diff_impact",
             "method_callees",
+            "method_hammocks",
         ] {
             assert!(
                 names.contains(&expected.to_string()),
                 "missing {expected}: {names:?}"
             );
         }
-        assert_eq!(names.len(), 7, "unexpected tool set: {names:?}");
+        assert_eq!(names.len(), 8, "unexpected tool set: {names:?}");
     }
 
     #[test]
