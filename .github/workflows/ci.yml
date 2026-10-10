@@ -4,6 +4,12 @@ on:
   push:
     branches: [main]
   pull_request:
+  # The GitHub-source job runs on a schedule as well as on demand. It is in this file
+  # rather than a separate one because GitHub only honours `schedule` for a workflow
+  # whose *filename* it recognises, and putting it elsewhere means it never runs.
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
@@ -55,7 +61,6 @@ jobs:
   # anything in this file. tiny-pdg-cs is also a valid C# target: its own fixtures are
   # real C#, so the analysis has something to find rather than reporting zero files.
   github:
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
