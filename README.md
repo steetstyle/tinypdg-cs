@@ -73,8 +73,50 @@ src/
   cli/            command handlers (thin dispatch, no business logic)
   analysis/       call graph, impact analysis, diff-impact analysis
   route/          HTTP route extraction (Controller + Minimal API)
+  source.rs       where the code comes from: a directory, or a GitHub repository
   main.rs         clap entry point
 ```
+
+## Sources from GitHub
+
+Anywhere a directory is accepted, a repository reference works too:
+
+```text
+./some/local/dir                        a path
+gh:steetstyle/tinylink                   the default branch
+gh:steetstyle/tinylink@main              a branch, tag or commit
+gh:steetstyle/unicpeak@main:Agency.API   a subdirectory of the repository
+```
+
+```console
+$ tiny-pdg-cs detect gh:unicpeak/unicpeak-analytics-api@main
+fetched gh:unicpeak/unicpeak-analytics-api@main -> ~/.cache/tiny-source/gh/unicpeak/unicpeak-analytics-api/…
+Analysis of 1667 file(s):
+  Classes: 2469, Interfaces: 89, Call sites: 29890
+```
+
+```console
+$ tiny-pdg-cs cfg gh:unicpeak/unicpeak-analytics-api@main:AdNetwork.API/Endpoints/GetConnectionDetailEndpoint.cs
+```
+
+The same string is a `path` argument over MCP, so an agent does not need a second
+shape to learn. A repository that holds several services is handled with the
+subdirectory part, which is what `:Agency.API` above is.
+
+Checkouts live in `~/.cache/tiny-source` — `TINY_SOURCE_CACHE` moves it — keyed by
+owner, repository and reference, so the second call of a conversation is a cache hit.
+5 seconds cold, 2 warm, measured on the repository above.
+
+Private repositories need a token in `GITHUB_TOKEN`, or `TINY_GITHUB_TOKEN` to win
+over it. It is deliberately not a command-line flag: `argv` is readable through `ps`,
+and a token that reaches a shell history or a CI log has to be rotated. It is passed to
+`git` through the environment rather than in the URL, so the remote recorded in
+`.git/config` stays the plain public one and re-fetching from the cache does not need
+the token to still exist.
+
+Without a token, a public repository works and a private one fails with a message
+saying so. Set `TINY_SOURCE_OFFLINE` to use only what is already cached, which is what
+a CI job that pre-populates the cache wants.
 
 ## Requirements
 
