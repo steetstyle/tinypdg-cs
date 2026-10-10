@@ -531,6 +531,13 @@ fn handle_context(
         "  confidence: {} -- {}",
         ctx.coverage.confidence, ctx.coverage.note
     );
+    if ctx.coverage.semantic != "ran" {
+        println!(
+            "  meaning-based search: DID NOT RUN ({}). Every anchor below was found by \
+             name alone.",
+            ctx.coverage.semantic
+        );
+    }
     if ctx.coverage.edges == 0 {
         println!(
             "  expanded: none -- this store holds no graph. Re-run `tiny-pdg-cs embed` to \

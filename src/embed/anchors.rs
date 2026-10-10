@@ -125,6 +125,15 @@ pub struct Coverage {
     /// Edges in the store. Zero means the index predates the graph, so nothing was
     /// expanded and the absence of expanded anchors is the store's, not the query's.
     pub edges: usize,
+    /// What happened to the semantic source on this query: `ran`, or `did not run: ...`
+    /// with the reason.
+    ///
+    /// Carried because the other two sources cannot tell it from success. A name search
+    /// over a store the vector model does not fit answers perfectly, names every symbol
+    /// it finds, and looks corroborated -- measured over MCP with no embedding
+    /// environment set, every anchor had `similarity: null` and the answer still said
+    /// `confidence: high`.
+    pub semantic: String,
 }
 
 /// Find symbols by name and by meaning, and report which found what.
@@ -157,8 +166,19 @@ pub fn find_context(
     let lowered = query.to_lowercase();
 
     // semantic
-    let hits: Vec<Hit> =
-        super::index::search(store, provider, query, k.max(10)).unwrap_or_default();
+    //
+    // The failure is kept rather than dropped. Measured over MCP: with no
+    // `TINY_EMBEDDING_*` in the environment the provider resolves to `hashing-1024`, the
+    // store is 768-wide, and the width check refuses the query -- correctly. Swallowing
+    // that left an answer with `similarity: null` on every anchor and
+    // `confidence: high`, which reads as "two sources agreed" when the third never ran.
+    // An agent cannot see a difference between that and a real answer.
+    let semantic = super::index::search(store, provider, query, k.max(10));
+    let semantic_status = match &semantic {
+        Ok(_) => "ran".to_string(),
+        Err(reason) => format!("did not run: {reason}"),
+    };
+    let hits: Vec<Hit> = semantic.unwrap_or_default();
     let semantic_scores: BTreeMap<String, f32> = hits
         .iter()
         .map(|h| (h.entry.symbol_id.clone(), h.score))
@@ -253,6 +273,18 @@ pub fn find_context(
                 as a guess and look for corroboration before acting on it"
             .to_string();
     }
+    if semantic_status != "ran" {
+        // Said first, because it changes how the rest of the answer reads. Two name
+        // sources agreeing is not weaker for having run alone -- it is exactly as strong
+        // as it looks -- but the missing one could have disagreed, and a caller has to
+        // know that the check was skipped rather than passed.
+        note = format!(
+            "the meaning-based source did not run ({status}), so nothing here was \
+             checked by meaning. The other sources are name matching and do not \
+             understand the query. -- {note}",
+            status = semantic_status.trim_start_matches("did not run: ")
+        );
+    }
 
     anchors.truncate(k);
 
@@ -341,6 +373,7 @@ pub fn find_context(
             note,
             expanded: expanded_count,
             edges,
+            semantic: semantic_status.clone(),
         },
     })
 }
@@ -606,6 +639,51 @@ mod tests {
             reached.similarity.is_none(),
             "no source compared this to the query, so there is no similarity: {reached:?}"
         );
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// A source that did not run is not a source that found nothing.
+    ///
+    /// Measured over MCP: with no embedding environment set, the provider resolves to
+    /// `hashing-1024` against a 768-wide store, the width check refuses the query, and
+    /// the answer came back with `similarity: null` on every anchor and
+    /// `confidence: high`. That reads as agreement between sources when one of them was
+    /// never asked.
+    #[test]
+    fn a_source_that_did_not_run_says_so() {
+        let (path, store) = seeded("nosemantic");
+        // A provider of the wrong width against a 256-wide store: the search cannot be
+        // answered, and must not look like a search that answered "nothing".
+        let wrong = HashingProvider::new(999);
+        let ctx = find_context(&store, &wrong, "credit transaction", 10).expect("search");
+
+        assert!(
+            ctx.coverage.semantic.starts_with("did not run:"),
+            "the coverage has to name the failure: {:?}",
+            ctx.coverage.semantic
+        );
+        assert!(
+            ctx.coverage.note.contains("did not run"),
+            "and the note a caller reads has to say it: {}",
+            ctx.coverage.note
+        );
+        for anchor in &ctx.anchors {
+            assert!(
+                !anchor.sources.iter().any(|s| s == "semantic"),
+                "nothing was compared by meaning: {anchor:?}"
+            );
+        }
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// And when it does run, it says that too -- so "ran" is not the absence of a
+    /// message, which would make the two indistinguishable in a log.
+    #[test]
+    fn a_source_that_ran_says_that() {
+        let (path, store) = seeded("semanticran");
+        let ctx = find_context(&store, &HashingProvider::new(256), "credit transaction", 10)
+            .expect("search");
+        assert_eq!(ctx.coverage.semantic, "ran");
         std::fs::remove_file(&path).ok();
     }
 
