@@ -88,7 +88,16 @@ impl ProviderSpec {
     /// up for it keeps working: `BCE_EMBEDDING_PROVIDER` / `BCE_EMBEDDING_MODEL`.
     /// `TINY_*` is accepted too because this crate's own tools should not need a
     /// prefix belonging to another project.
-    pub fn resolve(provider: Option<&str>, model: Option<&str>) -> Result<Self, String> {
+    ///
+    /// `base_url` is an argument rather than only an environment variable because two
+    /// models on one machine means two servers: without it, both reach for the same
+    /// default and one model's query goes to the other's endpoint -- measured, and it
+    /// looked like the model returning nothing.
+    pub fn resolve(
+        provider: Option<&str>,
+        model: Option<&str>,
+        base_url: Option<&str>,
+    ) -> Result<Self, String> {
         let pick = |flag: Option<&str>, vars: (&str, &str), fallback: &str| -> String {
             flag.map(str::to_string)
                 .or_else(|| std::env::var(vars.0).ok().filter(|v| !v.is_empty()))
@@ -128,9 +137,19 @@ impl ProviderSpec {
                          TEI, vLLM."
                             .to_string()
                     })?;
-                let base_url = std::env::var("TINY_EMBEDDING_BASE_URL")
-                    .or_else(|_| std::env::var("BCE_EMBEDDING_BASE_URL"))
-                    .unwrap_or_else(|_| "http://localhost:11434/v1".to_string());
+                let base_url = base_url
+                    .map(str::to_string)
+                    .or_else(|| {
+                        std::env::var("TINY_EMBEDDING_BASE_URL")
+                            .ok()
+                            .filter(|v| !v.is_empty())
+                    })
+                    .or_else(|| {
+                        std::env::var("BCE_EMBEDDING_BASE_URL")
+                            .ok()
+                            .filter(|v| !v.is_empty())
+                    })
+                    .unwrap_or_else(|| "http://localhost:11434/v1".to_string());
                 let api_key = std::env::var("TINY_EMBEDDING_API_KEY")
                     .or_else(|_| std::env::var("BCE_EMBEDDING_API_KEY"))
                     .or_else(|_| std::env::var("OPENAI_API_KEY"))
@@ -483,7 +502,7 @@ mod tests {
     /// a store can refuse a query from a different one.
     #[test]
     fn hashing_is_the_default_and_its_width_is_in_the_model_name() {
-        let spec = ProviderSpec::resolve(None, None).expect("resolve");
+        let spec = ProviderSpec::resolve(None, None, None).expect("resolve");
         assert_eq!(spec.provider, "hashing");
         let e = spec
             .build()
@@ -498,7 +517,8 @@ mod tests {
     /// `hashing-512` in the model name picks the width, so a test can be cheap.
     #[test]
     fn the_model_name_picks_the_width() {
-        let spec = ProviderSpec::resolve(Some("hashing"), Some("hashing-64")).expect("resolve");
+        let spec =
+            ProviderSpec::resolve(Some("hashing"), Some("hashing-64"), None).expect("resolve");
         let e = spec
             .build()
             .unwrap()
@@ -511,13 +531,34 @@ mod tests {
     /// Asking for a model without giving one is a question, not a crash.
     #[test]
     fn the_openai_provider_without_a_model_says_what_is_missing() {
-        let err = ProviderSpec::resolve(Some("openai"), None).unwrap_err();
+        let err = ProviderSpec::resolve(Some("openai"), None, None).unwrap_err();
         assert!(err.contains("needs a model"), "{err}");
+    }
+
+    /// The flag has to beat the environment, or setting one for a second model on the
+    /// machine silently sends the first model's query to the second's server.
+    #[test]
+    fn an_explicit_base_url_beats_the_environment() {
+        // Not set here on purpose: the assertion is about precedence, not about the
+        // variable, and a test that depends on ambient state is a test that fails on
+        // someone else's machine.
+        let spec =
+            ProviderSpec::resolve(Some("openai"), Some("m"), Some("http://127.0.0.1:8081/v1"))
+                .expect("resolve");
+        assert_eq!(spec.base_url, "http://127.0.0.1:8081/v1");
+    }
+
+    /// And with none given, the Ollama default -- which is where the tool this was
+    /// modelled on puts its default too.
+    #[test]
+    fn without_a_base_url_it_defaults_to_ollama() {
+        let spec = ProviderSpec::resolve(Some("openai"), Some("m"), None).expect("resolve");
+        assert!(spec.base_url.contains("11434"), "{}", spec.base_url);
     }
 
     #[test]
     fn an_unknown_provider_is_named_in_the_error() {
-        let err = ProviderSpec::resolve(Some("cohere"), None).unwrap_err();
+        let err = ProviderSpec::resolve(Some("cohere"), None, None).unwrap_err();
         assert!(err.contains("cohere"), "{err}");
     }
 

@@ -103,6 +103,12 @@ enum Commands {
         /// The model, for the openai provider. For hashing, `hashing-<width>` picks the width
         #[arg(long)]
         model: Option<String>,
+        /// An OpenAI-compatible server. Defaults to TINY_EMBEDDING_BASE_URL, then
+        /// http://localhost:11434/v1 (Ollama). Needs saying: two models on one machine
+        /// means two servers, and reaching for the same default for both sends one model's
+        /// query to the other's endpoint.
+        #[arg(long, value_name = "URL")]
+        base_url: Option<String>,
         /// Empty the store first. Required to change model or width
         #[arg(long)]
         reset: bool,
@@ -119,6 +125,8 @@ enum Commands {
         provider: Option<String>,
         #[arg(long)]
         model: Option<String>,
+        #[arg(long, value_name = "URL")]
+        base_url: Option<String>,
         #[arg(long, default_value = "10", help = "How many results (1-100)")]
         limit: usize,
         #[arg(long, help = "JSON output instead of a table")]
@@ -136,6 +144,8 @@ enum Commands {
         provider: Option<String>,
         #[arg(long)]
         model: Option<String>,
+        #[arg(long, value_name = "URL")]
+        base_url: Option<String>,
         #[arg(long, default_value = "10", help = "How many anchors (1-100)")]
         limit: usize,
         #[arg(long, help = "JSON output instead of a table")]
@@ -249,13 +259,22 @@ fn main() {
             store,
             provider,
             model,
+            base_url,
             reset,
-        } => handle_embed(&path, &store, provider.as_deref(), model.as_deref(), reset),
+        } => handle_embed(
+            &path,
+            &store,
+            provider.as_deref(),
+            model.as_deref(),
+            base_url.as_deref(),
+            reset,
+        ),
         Commands::Semantic {
             query,
             store,
             provider,
             model,
+            base_url,
             limit,
             json,
         } => handle_semantic(
@@ -263,6 +282,7 @@ fn main() {
             &store,
             provider.as_deref(),
             model.as_deref(),
+            base_url.as_deref(),
             limit,
             json,
         ),
@@ -271,6 +291,7 @@ fn main() {
             store,
             provider,
             model,
+            base_url,
             limit,
             json,
         } => handle_context(
@@ -278,6 +299,7 @@ fn main() {
             &store,
             provider.as_deref(),
             model.as_deref(),
+            base_url.as_deref(),
             limit,
             json,
         ),
@@ -357,11 +379,12 @@ fn handle_embed(
     store_spec: &str,
     provider: Option<&str>,
     model: Option<&str>,
+    base_url: Option<&str>,
     reset: bool,
 ) -> anyhow::Result<()> {
     use tiny_pdg_cs::embed::{index_project, open_store, ProviderSpec};
 
-    let spec = ProviderSpec::resolve(provider, model).map_err(anyhow::Error::msg)?;
+    let spec = ProviderSpec::resolve(provider, model, base_url).map_err(anyhow::Error::msg)?;
     let provider = spec.build().map_err(anyhow::Error::msg)?;
     let mut store = open_store(store_spec).map_err(anyhow::Error::msg)?;
 
@@ -399,12 +422,13 @@ fn handle_semantic(
     store_spec: &str,
     provider: Option<&str>,
     model: Option<&str>,
+    base_url: Option<&str>,
     limit: usize,
     json: bool,
 ) -> anyhow::Result<()> {
     use tiny_pdg_cs::embed::{open_store, search, ProviderSpec};
 
-    let spec = ProviderSpec::resolve(provider, model).map_err(anyhow::Error::msg)?;
+    let spec = ProviderSpec::resolve(provider, model, base_url).map_err(anyhow::Error::msg)?;
     let provider = spec.build().map_err(anyhow::Error::msg)?;
     let store = open_store(store_spec).map_err(anyhow::Error::msg)?;
 
@@ -430,12 +454,13 @@ fn handle_context(
     store_spec: &str,
     provider: Option<&str>,
     model: Option<&str>,
+    base_url: Option<&str>,
     limit: usize,
     json: bool,
 ) -> anyhow::Result<()> {
     use tiny_pdg_cs::embed::{find_context, open_store, ProviderSpec};
 
-    let spec = ProviderSpec::resolve(provider, model).map_err(anyhow::Error::msg)?;
+    let spec = ProviderSpec::resolve(provider, model, base_url).map_err(anyhow::Error::msg)?;
     let provider = spec.build().map_err(anyhow::Error::msg)?;
     let store = open_store(store_spec).map_err(anyhow::Error::msg)?;
 

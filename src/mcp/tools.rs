@@ -1051,6 +1051,8 @@ pub struct FindContextArgs {
     pub store: String,
     pub provider: Option<String>,
     pub model: Option<String>,
+    /// An OpenAI-compatible server. Defaults to TINY_EMBEDDING_BASE_URL, then Ollama.
+    pub base_url: Option<String>,
     #[serde(default)]
     pub limit: Option<usize>,
 }
@@ -1064,7 +1066,11 @@ pub struct FindContextArgs {
 pub fn handle_find_context(args: &FindContextArgs) -> Result<Value, String> {
     use crate::embed::{find_context, open_store, ProviderSpec};
 
-    let spec = ProviderSpec::resolve(args.provider.as_deref(), args.model.as_deref())?;
+    let spec = ProviderSpec::resolve(
+        args.provider.as_deref(),
+        args.model.as_deref(),
+        args.base_url.as_deref(),
+    )?;
     let provider = spec.build()?;
     let store = open_store(&args.store)?;
 
@@ -1084,6 +1090,8 @@ pub struct EmbedIndexArgs {
     pub store: String,
     pub provider: Option<String>,
     pub model: Option<String>,
+    /// An OpenAI-compatible server. Defaults to TINY_EMBEDDING_BASE_URL, then Ollama.
+    pub base_url: Option<String>,
     #[serde(default)]
     pub reset: Option<bool>,
 }
@@ -1095,7 +1103,11 @@ pub struct EmbedIndexArgs {
 pub fn handle_embed_index(args: &EmbedIndexArgs) -> Result<Value, String> {
     use crate::embed::{index_project, open_store, ProviderSpec};
 
-    let spec = ProviderSpec::resolve(args.provider.as_deref(), args.model.as_deref())?;
+    let spec = ProviderSpec::resolve(
+        args.provider.as_deref(),
+        args.model.as_deref(),
+        args.base_url.as_deref(),
+    )?;
     let provider = spec.build()?;
     let mut store = open_store(&args.store)?;
 
