@@ -112,6 +112,17 @@ enum Commands {
         /// Empty the store first. Required to change model or width
         #[arg(long)]
         reset: bool,
+        /// Keep test code. Off by default: a test method's name is a sentence
+        /// describing the behaviour, so it matches a task sentence better than any
+        /// production method's name does, and retrieval returns the tests
+        #[arg(long)]
+        include_tests: bool,
+        /// Index only paths containing this. Repeatable
+        #[arg(long, value_name = "TEXT")]
+        include: Vec<String>,
+        /// Skip paths containing this. Repeatable, applied after --include
+        #[arg(long, value_name = "TEXT")]
+        exclude: Vec<String>,
     },
     /// Find symbols by meaning rather than by name
     Semantic {
@@ -261,6 +272,9 @@ fn main() {
             model,
             base_url,
             reset,
+            include_tests,
+            include,
+            exclude,
         } => handle_embed(
             &path,
             &store,
@@ -268,6 +282,11 @@ fn main() {
             model.as_deref(),
             base_url.as_deref(),
             reset,
+            tiny_pdg_cs::embed::Filter {
+                include_tests,
+                include,
+                exclude,
+            },
         ),
         Commands::Semantic {
             query,
@@ -381,6 +400,7 @@ fn handle_embed(
     model: Option<&str>,
     base_url: Option<&str>,
     reset: bool,
+    filter: tiny_pdg_cs::embed::Filter,
 ) -> anyhow::Result<()> {
     use tiny_pdg_cs::embed::{index_project, open_store, ProviderSpec};
 
@@ -393,6 +413,7 @@ fn handle_embed(
         provider.as_ref(),
         std::path::Path::new(path),
         reset,
+        &filter,
     )
     .map_err(anyhow::Error::msg)?;
 
@@ -402,6 +423,12 @@ fn handle_embed(
     );
     println!("  model: {} ({} dim)", report.model, report.dim);
     println!("  took:  {} ms", report.elapsed_ms);
+    // Said always, including at zero: a count that can be 4,000 or 0 with nothing
+    // around it to tell the two apart is a count nobody can rely on.
+    println!("  excluded {} symbol(s)", report.excluded_total);
+    for (reason, count) in &report.excluded {
+        println!("    {count:>6}  {reason}");
+    }
     if !report.failed.is_empty() {
         // Counted and reported, not fatal: one file mid-edit should not cost the other
         // two hundred.

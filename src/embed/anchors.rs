@@ -272,6 +272,7 @@ mod tests {
             name: name.clone(),
             signature: Some(format!("void {name}()")),
             containing_type: containing,
+            namespace: String::new(),
             doc: None,
             calls: Vec::new(),
             graph: None,

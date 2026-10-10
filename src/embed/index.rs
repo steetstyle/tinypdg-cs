@@ -26,6 +26,12 @@ pub struct Symbol {
     pub name: String,
     pub signature: Option<String>,
     pub containing_type: Option<String>,
+    /// The file's namespace, read from the source.
+    ///
+    /// Carried because it is one of the three test signals and a symbol otherwise has no
+    /// way to know it: a test class kept in a production folder is invisible from the
+    /// path, and invisible from the type name if the class is not named `*Tests`.
+    pub namespace: String,
     pub doc: Option<String>,
     /// Methods it calls, names only. Included in the text because a method is often
     /// found by what it touches rather than by what it is called.
@@ -89,6 +95,12 @@ pub struct IndexReport {
     pub files: usize,
     /// Files that did not parse, with the reason. Reported, never fatal.
     pub failed: Vec<(String, String)>,
+    /// Symbols the filter dropped, with the reason and how many shared it.
+    ///
+    /// Reported because a smaller index reads exactly like a repository that has nothing
+    /// to exclude, and an agent cannot tell the difference from the number alone.
+    pub excluded: Vec<(String, usize)>,
+    pub excluded_total: usize,
 }
 
 /// Turn symbols into vectors and put them in a store.
@@ -184,6 +196,8 @@ pub fn embed_symbols(
         elapsed_ms: started.elapsed().as_millis(),
         files: 0,
         failed: Vec::new(),
+        excluded: Vec::new(),
+        excluded_total: 0,
     })
 }
 
@@ -252,6 +266,14 @@ pub struct ParseOutcome {
     pub symbols: Vec<Symbol>,
     pub files: usize,
     pub failed: Vec<(String, String)>,
+    /// Symbols the filter dropped: reason -> how many.
+    pub excluded: Vec<(String, usize)>,
+}
+
+impl ParseOutcome {
+    pub fn excluded_total(&self) -> usize {
+        self.excluded.iter().map(|(_, n)| n).sum()
+    }
 }
 
 /// Every `.cs` file under `root`, sorted, so a re-index is deterministic.
@@ -281,12 +303,13 @@ pub fn csharp_files(root: &std::path::Path) -> Vec<std::path::PathBuf> {
     out
 }
 
-pub fn collect_symbols(root: &std::path::Path) -> ParseOutcome {
+pub fn collect_symbols(root: &std::path::Path, filter: &super::filter::Filter) -> ParseOutcome {
     use crate::parse::parser::parse_source;
     use crate::resolve::symbols::SymbolTable;
 
     let mut symbols: BTreeMap<String, Symbol> = BTreeMap::new();
     let mut failed = Vec::new();
+    let mut excluded: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
     let files = csharp_files(root);
 
     for path in &files {
@@ -299,6 +322,8 @@ pub fn collect_symbols(root: &std::path::Path) -> ParseOutcome {
             failed.push((display, "does not parse".into()));
             continue;
         };
+        let namespace = read_namespace(&source);
+
         let table = match SymbolTable::from_ast(tree.root_node(), &source) {
             Ok(t) => t,
             Err(e) => {
@@ -325,6 +350,13 @@ pub fn collect_symbols(root: &std::path::Path) -> ParseOutcome {
                 .map(|m| format!("{class_name}.{}", m.method))
                 .collect();
 
+            // Once per class rather than per method: the reasons are class-level, and a
+            // class of forty methods would otherwise print forty identical lines.
+            if let Some(reason) = filter.rejection(&file, &namespace, class_name) {
+                *excluded.entry(reason).or_default() += info.methods.len().max(1);
+                continue;
+            }
+
             for method in &info.methods {
                 let id = format!("{class_name}.{}", method.method);
                 let callees: Vec<String> = info
@@ -341,6 +373,7 @@ pub fn collect_symbols(root: &std::path::Path) -> ParseOutcome {
                     name: method.method.clone(),
                     signature: Some(method.signature.clone()),
                     containing_type: Some(class_name.clone()),
+                    namespace: namespace.clone(),
                     doc: None,
                     calls: callees,
                     // Kept out of the rendered text but recorded, because a symbol's
@@ -358,6 +391,7 @@ pub fn collect_symbols(root: &std::path::Path) -> ParseOutcome {
                 name: class_name.clone(),
                 signature: None,
                 containing_type: None,
+                namespace: namespace.clone(),
                 doc: None,
                 calls: Vec::new(),
                 graph: Some(method_ids),
@@ -369,21 +403,48 @@ pub fn collect_symbols(root: &std::path::Path) -> ParseOutcome {
         symbols: symbols.into_values().collect(),
         files: files.len(),
         failed,
+        excluded: excluded.into_iter().collect(),
     }
 }
 
-/// Index a project directory: parse it, then embed what it found.
+/// The file's namespace, or the empty string.
+///
+/// Read from the source rather than from the path, because a project that keeps tests
+/// beside production code has no way to say so in either. Cheap: it is the first
+/// namespace declaration in the file, and the cost of being wrong is that the filter
+/// falls back to the other two signals.
+fn read_namespace(source: &str) -> String {
+    for line in source.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("namespace ") {
+            let name = rest.trim().trim_end_matches(';').trim();
+            if !name.is_empty() {
+                return name.to_string();
+            }
+        }
+    }
+    String::new()
+}
+
+/// Index a project directory: parse it, filter it, then embed what is left.
+///
+/// Test code is dropped unless the filter says otherwise, and how many were dropped is
+/// in the report: an index of 5,883 symbols where a repository has 7,087 says nothing on
+/// its own, and the number is what tells an agent to ask.
 pub fn index_project(
     store: &mut dyn VectorStore,
     provider: &dyn Provider,
     path: &std::path::Path,
     reset: bool,
+    filter: &super::filter::Filter,
 ) -> Result<IndexReport, String> {
-    let outcome = collect_symbols(path);
+    let outcome = collect_symbols(path, filter);
     let mut report = embed_symbols(store, provider, &outcome.symbols, reset)?;
     report.files = outcome.files;
     // Reported rather than thrown: a handful of unparseable files in a repository is
     // normal, and refusing to index the other two hundred is not useful.
+    report.excluded_total = outcome.excluded_total();
+    report.excluded = outcome.excluded;
     report.failed = outcome.failed;
     Ok(report)
 }
@@ -420,6 +481,7 @@ mod tests {
             name: name.clone(),
             signature: Some(format!("public void {name}()")),
             containing_type: containing,
+            namespace: String::new(),
             doc: None,
             calls: Vec::new(),
             graph: None,

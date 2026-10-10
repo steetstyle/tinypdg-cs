@@ -1094,6 +1094,17 @@ pub struct EmbedIndexArgs {
     pub base_url: Option<String>,
     #[serde(default)]
     pub reset: Option<bool>,
+    /// Keep test code. Off by default: a test method's name is a sentence describing the
+    /// behaviour, so it matches a task sentence better than a production method's name
+    /// does, and retrieval returns the tests rather than the code.
+    #[serde(default)]
+    pub include_tests: Option<bool>,
+    /// Index only paths containing this. Repeatable.
+    #[serde(default)]
+    pub include: Option<Vec<String>>,
+    /// Skip paths containing this. Repeatable, applied after `include`.
+    #[serde(default)]
+    pub exclude: Option<Vec<String>>,
 }
 
 /// Index a project's symbols into a vector store.
@@ -1111,11 +1122,17 @@ pub fn handle_embed_index(args: &EmbedIndexArgs) -> Result<Value, String> {
     let provider = spec.build()?;
     let mut store = open_store(&args.store)?;
 
+    let filter = crate::embed::Filter {
+        include_tests: args.include_tests.unwrap_or(false),
+        include: args.include.clone().unwrap_or_default(),
+        exclude: args.exclude.clone().unwrap_or_default(),
+    };
     let report = index_project(
         store.as_mut(),
         provider.as_ref(),
         std::path::Path::new(&args.path),
         args.reset.unwrap_or(false),
+        &filter,
     )?;
     serde_json::to_value(report).map_err(|e| e.to_string())
 }

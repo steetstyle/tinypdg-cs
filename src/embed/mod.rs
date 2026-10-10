@@ -34,11 +34,13 @@
 //! says so without having to be trusted.
 
 pub mod anchors;
+pub mod filter;
 pub mod index;
 pub mod provider;
 pub mod store;
 
 pub use anchors::{find_context, Anchor, Context, Coverage, Source};
+pub use filter::Filter;
 pub use index::{index_project, search, Symbol};
 pub use provider::{tokenize, Embedding, HashingProvider, OpenAiProvider, Provider, ProviderSpec};
 pub use store::{Entry, Hit, IndexInfo, PostgresStore, SqliteStore, VectorStore};
