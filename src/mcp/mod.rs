@@ -34,6 +34,25 @@ impl Default for AnalysisServer {
     }
 }
 
+/// The tool names this server serves, in listing order.
+///
+/// Declared here rather than written out in each test because a test that asserts a
+/// number it also has to remember to update stops being a check: `tools_are_callable_
+/// over_http` was asserting 8 while the router served 9, because `search_github` was
+/// added and the number was not. The point of the assertion is that the transport does
+/// not lose tools, and a hand-kept count cannot tell lost from added.
+pub const LISTED_TOOLS: [&str; 9] = [
+    "project_summary",
+    "list_routes",
+    "find_callers",
+    "method_pdg",
+    "method_callees",
+    "find_patterns",
+    "diff_impact",
+    "method_hammocks",
+    "search_github",
+];
+
 #[tool_router(router = tool_router)]
 impl AnalysisServer {
     pub fn new() -> Self {
@@ -243,23 +262,39 @@ mod tests {
             .iter()
             .map(|t| t.name.to_string())
             .collect();
-        for expected in [
-            "project_summary",
-            "list_routes",
-            "find_callers",
-            "method_pdg",
-            "find_patterns",
-            "diff_impact",
-            "method_callees",
-            "method_hammocks",
-            "search_github",
-        ] {
+        for expected in LISTED_TOOLS {
             assert!(
                 names.contains(&expected.to_string()),
                 "missing {expected}: {names:?}"
             );
         }
-        assert_eq!(names.len(), 9, "unexpected tool set: {names:?}");
+        assert_eq!(
+            names.len(),
+            LISTED_TOOLS.len(),
+            "unexpected tool set: {names:?}"
+        );
+    }
+
+    /// The listing and the router must agree, and this is the assertion that notices.
+    ///
+    /// Everything else in this file checks the router against the list, which cannot
+    /// catch the list falling behind -- it is checked against the same list. This one
+    /// goes the other way and is what catches a tool added to one and not the other.
+    #[test]
+    fn the_listing_and_the_router_agree() {
+        let router = AnalysisServer::tool_router();
+        let from_router: std::collections::BTreeSet<String> = router
+            .list_all()
+            .iter()
+            .map(|t| t.name.to_string())
+            .collect();
+        let from_const: std::collections::BTreeSet<String> =
+            LISTED_TOOLS.iter().map(|t| t.to_string()).collect();
+
+        assert_eq!(
+            from_router, from_const,
+            "LISTED_TOOLS and the router disagree; a tool was added to one and not the other"
+        );
     }
 
     #[test]

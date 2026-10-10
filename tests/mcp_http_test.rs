@@ -226,19 +226,18 @@ async fn tools_are_callable_over_http() {
     assert_eq!(status, 200, "tools/list failed: {body}");
     let tools = body["result"]["tools"].as_array().expect("tools array");
     let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
-    for expected in [
-        "project_summary",
-        "list_routes",
-        "find_callers",
-        "method_pdg",
-        "find_patterns",
-        "diff_impact",
-        "method_callees",
-        "method_hammocks",
-    ] {
+    // LISTED_TOOLS, not a number written here. This test asserts that the HTTP transport
+    // does not lose tools, and it was asserting 8 while the router served 9 -- because
+    // search_github was added and this number was not. A hand-kept count cannot tell a
+    // lost tool from an added one, which is the only thing this test is for.
+    for expected in tiny_pdg_cs::mcp::LISTED_TOOLS {
         assert!(names.contains(&expected), "missing {expected} in {names:?}");
     }
-    assert_eq!(names.len(), 8, "{names:?}");
+    assert_eq!(
+        names.len(),
+        tiny_pdg_cs::mcp::LISTED_TOOLS.len(),
+        "{names:?}"
+    );
 
     std::fs::remove_dir_all(&dir).ok();
 }
@@ -329,7 +328,11 @@ async fn sdk_client_can_drive_the_http_server() {
 
     let tools = client.list_all_tools().await.expect("list tools");
     let names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
-    assert_eq!(names.len(), 8, "{names:?}");
+    assert_eq!(
+        names.len(),
+        tiny_pdg_cs::mcp::LISTED_TOOLS.len(),
+        "{names:?}"
+    );
     assert!(names.contains(&"list_routes"), "{names:?}");
 
     client.cancel().await.ok();
