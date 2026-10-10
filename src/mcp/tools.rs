@@ -1338,6 +1338,9 @@ public static class EndpointExtension
     /// unchanged — only its callers moved.
     #[test]
     fn diff_impact_reports_a_method_that_lost_a_caller() {
+        // Every test that reaches the project cache shares one lock. Without it this
+        // test inserts entries while a cache test is asserting len() == 1.
+        let _guard = cache::test_guard();
         let v1 = fixture_dir("diff_v1");
         let v2 = fixture_dir("diff_v2");
 
@@ -1416,6 +1419,9 @@ public static class EndpointExtension
     /// does not care about is filtered out of the default response.
     #[test]
     fn diff_impact_only_lost_callers_filter_excludes_added_methods() {
+        // Every test that reaches the project cache shares one lock. Without it this
+        // test inserts entries while a cache test is asserting len() == 1.
+        let _guard = cache::test_guard();
         let v1 = fixture_dir("filter_v1");
         let v2 = fixture_dir("filter_v2");
 
@@ -1473,6 +1479,9 @@ public static class EndpointExtension
     /// method changed.
     #[test]
     fn diff_impact_on_identical_versions_reports_nothing() {
+        // Every test that reaches the project cache shares one lock. Without it this
+        // test inserts entries while a cache test is asserting len() == 1.
+        let _guard = cache::test_guard();
         let v1 = fixture_dir("same_v1");
         let v2 = fixture_dir("same_v2");
         let src = "namespace N;\npublic class S { public void A() {} public void B() { A(); } }\n";
@@ -1496,6 +1505,9 @@ public static class EndpointExtension
 
     #[test]
     fn diff_impact_rejects_a_missing_path_with_a_clear_message() {
+        // Every test that reaches the project cache shares one lock. Without it this
+        // test inserts entries while a cache test is asserting len() == 1.
+        let _guard = cache::test_guard();
         let err = diff_impact(DiffImpactArgs {
             path_v1: "/nonexistent/version1".into(),
             path_v2: "/nonexistent/version2".into(),
@@ -1510,6 +1522,9 @@ public static class EndpointExtension
 
     #[test]
     fn diff_impact_limit_truncates_and_says_so() {
+        // Every test that reaches the project cache shares one lock. Without it this
+        // test inserts entries while a cache test is asserting len() == 1.
+        let _guard = cache::test_guard();
         let v1 = fixture_dir("limit_v1");
         let v2 = fixture_dir("limit_v2");
         write(
@@ -1551,6 +1566,9 @@ public static class EndpointExtension
     /// this says what it then does.
     #[test]
     fn method_callees_lists_what_a_method_calls() {
+        // Every test that reaches the project cache shares one lock. Without it this
+        // test inserts entries while a cache test is asserting len() == 1.
+        let _guard = cache::test_guard();
         let dir = fixture_dir("callees");
         write(
             &dir,
@@ -1596,6 +1614,9 @@ public class Svc {
     /// a real method's list and bury the project's own code.
     #[test]
     fn method_callees_internal_only_hides_unresolved_callees() {
+        // Every test that reaches the project cache shares one lock. Without it this
+        // test inserts entries while a cache test is asserting len() == 1.
+        let _guard = cache::test_guard();
         let dir = fixture_dir("callees_internal");
         write(
             &dir,
@@ -1653,6 +1674,9 @@ public class Svc {
     /// method look simpler than it is.
     #[test]
     fn method_callees_reports_untypeable_calls_as_external() {
+        // Every test that reaches the project cache shares one lock. Without it this
+        // test inserts entries while a cache test is asserting len() == 1.
+        let _guard = cache::test_guard();
         let dir = fixture_dir("callees_untyped");
         write(
             &dir,
@@ -1697,6 +1721,9 @@ public class Svc {
 
     #[test]
     fn method_callees_errors_on_an_unknown_method() {
+        // Every test that reaches the project cache shares one lock. Without it this
+        // test inserts entries while a cache test is asserting len() == 1.
+        let _guard = cache::test_guard();
         let dir = fixture_dir("callees_missing");
         write(
             &dir,
@@ -1725,6 +1752,9 @@ public class Svc {
     /// complete.
     #[test]
     fn list_routes_pages_with_offset_and_limit() {
+        // Every test that reaches the project cache shares one lock. Without it this
+        // test inserts entries while a cache test is asserting len() == 1.
+        let _guard = cache::test_guard();
         let dir = fixture_dir("routes_page");
         let mut registration = String::new();
         for i in 0..6 {
@@ -1773,6 +1803,9 @@ public class Svc {
 
     #[test]
     fn list_routes_filters_by_http_method_and_path_prefix() {
+        // Every test that reaches the project cache shares one lock. Without it this
+        // test inserts entries while a cache test is asserting len() == 1.
+        let _guard = cache::test_guard();
         let dir = fixture_dir("routes_verb");
         write(
             &dir,
@@ -1823,6 +1856,9 @@ public class Svc {
 
     #[test]
     fn find_callers_max_distance_keeps_only_direct_callers() {
+        // Every test that reaches the project cache shares one lock. Without it this
+        // test inserts entries while a cache test is asserting len() == 1.
+        let _guard = cache::test_guard();
         let dir = fixture_dir("distance");
         write(
             &dir,
@@ -1872,6 +1908,9 @@ public class Far { public void G() { Mid.G(); } }
 
     #[test]
     fn find_callers_reports_call_sites_as_evidence() {
+        // Every test that reaches the project cache shares one lock. Without it this
+        // test inserts entries while a cache test is asserting len() == 1.
+        let _guard = cache::test_guard();
         let dir = fixture_dir("evidence");
         write(
             &dir,
