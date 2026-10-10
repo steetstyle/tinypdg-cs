@@ -143,17 +143,17 @@ fn handshake_advertises_the_read_only_tools() {
     let listed = mcp.send("tools/list", serde_json::json!({}));
     let tools = listed["result"]["tools"].as_array().expect("tools array");
     let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
-    for expected in [
-        "project_summary",
-        "list_routes",
-        "find_callers",
-        "method_pdg",
-        "find_patterns",
-        "method_hammocks",
-    ] {
+    // LISTED_TOOLS, like the HTTP test. This was the third hand-kept count in this
+    // repository asserting eight while the router serves nine, so the constant is now
+    // the only place the set is written down.
+    for expected in tiny_pdg_cs::mcp::LISTED_TOOLS {
         assert!(names.contains(&expected), "missing {expected} in {names:?}");
     }
-    assert_eq!(tools.len(), 8, "unexpected tool set: {names:?}");
+    assert_eq!(
+        tools.len(),
+        tiny_pdg_cs::mcp::LISTED_TOOLS.len(),
+        "unexpected tool set: {names:?}"
+    );
 
     // An agent decides when to call a tool from its description, so an empty
     // one makes the tool unreachable in practice.
