@@ -16,7 +16,7 @@ pub fn detect_structural(ctx: &DetectionContext) -> Vec<PatternMatch> {
 }
 
 fn detect_composite(ctx: &DetectionContext, results: &mut Vec<PatternMatch>) {
-    for (iface_name, _iface) in &ctx.type_graph.interfaces {
+    for iface_name in ctx.type_graph.interfaces.keys() {
         detect_composite_for_type(ctx, results, iface_name, true);
     }
     for (class_name, class) in &ctx.type_graph.classes {

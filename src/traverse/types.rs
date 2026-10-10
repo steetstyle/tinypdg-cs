@@ -385,12 +385,14 @@ pub fn resolve_down(
     }
 
     let mut result = Vec::new();
-    let mut idx = 0;
     let mut sorted: Vec<_> = seen.into_iter().collect();
     sorted.sort_by(|a, b| (a.0).0.cmp(&(b.0).0));
 
-    for ((callee, callee_class), sites) in sorted {
-        idx += 1;
+    // `idx` is 1-based: a nav entry numbered from 0 would read as "no entry" next to
+    // the `navigate_*` commands that take it. The counter was open-coded and incremented
+    // before use, which is the same thing said the long way round.
+    for (i, ((callee, callee_class), sites)) in sorted.into_iter().enumerate() {
+        let idx = i + 1;
         let first = sites[0];
         let via = if first.target_expr.is_empty() {
             String::new()
@@ -731,12 +733,12 @@ fn group_up_calls(calls: Vec<&CallSite>) -> Vec<NavEntry> {
     }
 
     let mut result = Vec::new();
-    let mut idx = 0;
     let mut sorted: Vec<_> = seen.into_iter().collect();
     sorted.sort_by(|a, b| a.0.cmp(&b.0));
 
-    for (caller_class, sites) in sorted {
-        idx += 1;
+    // 1-based, for the same reason as the outgoing list above.
+    for (i, (caller_class, sites)) in sorted.into_iter().enumerate() {
+        let idx = i + 1;
         let first = sites[0];
         let via = first.caller_method.clone();
         let target = NodeRef {
@@ -1813,7 +1815,7 @@ class C2 : I { public void M() {} }";
         // MapPost("/x", H1) and MapPost("/y", H2) each produce a Delegate entry
         // Both have H1/H2 as handlers respectively
         assert!(
-            del_entries.len() >= 1,
+            !del_entries.is_empty(),
             "should have at least one Delegate entry; down: {:?}",
             state.down
         );

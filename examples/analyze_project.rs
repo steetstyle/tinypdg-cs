@@ -10,6 +10,13 @@ use tiny_pdg_cs::detect::types::DetectionContext;
 use tiny_pdg_cs::parse::parser::parse_source;
 use tiny_pdg_cs::resolve::symbols::SymbolTable;
 
+/// Internal calls grouped by caller class: callee class, callee method, whether the edge
+/// is external, and the dispatch target expression when there was one.
+///
+/// Named because the inline version was unreadable at the point of use and said nothing
+/// about what the four-tuple means.
+type CallsByCaller = HashMap<String, Vec<(String, String, bool, Option<String>)>>;
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let eshop_root = if args.len() > 1 {
@@ -176,8 +183,7 @@ fn main() {
         // Per-project call graph: show internal calls by class
         if !cg.calls.is_empty() {
             println!("\n  --- Internal Call Graph ---");
-            let mut by_caller: HashMap<String, Vec<(String, String, bool, Option<String>)>> =
-                HashMap::new();
+            let mut by_caller: CallsByCaller = HashMap::new();
             for call in &cg.calls {
                 by_caller
                     .entry(call.caller_class.clone())
@@ -263,7 +269,7 @@ fn collect_cs_files(dir: &str, files: &mut Vec<String>) {
             let path = entry.path();
             if path.is_dir() {
                 collect_cs_files(&path.to_string_lossy(), files);
-            } else if path.extension().map_or(false, |e| e == "cs") {
+            } else if path.extension().is_some_and(|e| e == "cs") {
                 files.push(path.to_string_lossy().to_string());
             }
         }

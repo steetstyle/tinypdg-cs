@@ -42,6 +42,12 @@ pub struct CallGraph {
     pub method_calls: HashMap<String, Vec<String>>,
 }
 
+impl Default for CallGraph {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CallGraph {
     pub fn new() -> Self {
         CallGraph {
@@ -294,7 +300,7 @@ impl CallGraphBuilder {
                             if let Some(gc) = arg.child(j) {
                                 if gc.kind() == "identifier" {
                                     if let Ok(text) = gc.utf8_text(source.as_bytes()) {
-                                        if caller_class_info.map_or(false, |ci| {
+                                        if caller_class_info.is_some_and(|ci| {
                                             ci.methods.iter().any(|m| m.method == text)
                                         }) {
                                             delegates.push(text.to_string());

@@ -15,6 +15,12 @@ pub struct SymbolTable {
     base_types: HashMap<String, Vec<String>>,
 }
 
+impl Default for SymbolTable {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SymbolTable {
     pub fn new() -> Self {
         SymbolTable {

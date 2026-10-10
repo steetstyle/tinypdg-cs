@@ -75,16 +75,15 @@ pub fn resolve_rta(
         return Vec::new();
     }
 
-    let confidence = if filtered.len() == 1 {
-        Confidence::RTA
-    } else {
-        Confidence::RTA
-    };
-
+    // Confidence::RTA whether one method survived the filter or several: that is what
+    // the code has always said, and the branch that used to test `filtered.len()` sent
+    // both arms to the same variant. Whether several surviving implementations should
+    // read as RTA or as MultiImpl is a judgement about the resolver, not a formatting
+    // question, so it is left as it is rather than changed here.
     vec![CallSite {
         caller: caller.to_string(),
         target: target.clone(),
-        confidence,
+        confidence: Confidence::RTA,
         resolved: filtered,
     }]
 }

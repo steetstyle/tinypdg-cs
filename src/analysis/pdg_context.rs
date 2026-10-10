@@ -41,7 +41,7 @@ impl PdgContext {
                 let path = entry.path();
                 if path.is_dir() {
                     self.load_files(&path);
-                } else if path.extension().map_or(false, |e| e == "cs") {
+                } else if path.extension().is_some_and(|e| e == "cs") {
                     self.load_file(&path);
                 }
             }
@@ -145,7 +145,7 @@ impl PdgContext {
                             .chars()
                             .all(|c| c.is_alphanumeric() || c == '_' || c == '.')
                             && !arg.is_empty()
-                            && !arg.chars().next().map_or(true, |c| c.is_ascii_digit())
+                            && !arg.chars().next().is_none_or(|c| c.is_ascii_digit())
                         {
                             // This could be a variable — find where it was defined
                             let def_line = Self::find_definition(&source_lines, arg, line);

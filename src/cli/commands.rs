@@ -882,7 +882,7 @@ pub fn collect_cs_files(dir: &Path, files: &mut Vec<String>) {
             let path = entry.path();
             if path.is_dir() {
                 collect_cs_files(&path, files);
-            } else if path.extension().map_or(false, |e| e == "cs") {
+            } else if path.extension().is_some_and(|e| e == "cs") {
                 files.push(path.to_string_lossy().to_string());
             }
         }

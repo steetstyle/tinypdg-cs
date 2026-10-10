@@ -88,7 +88,7 @@ fn classify_function(node: Node, source: &str) -> Option<CallTarget> {
             if expr.kind() == "identifier" {
                 let expr_text = expr.utf8_text(source.as_bytes()).ok()?;
                 // Uppercase start heuristic for static classes
-                if expr_text.chars().next().map_or(false, |c| c.is_uppercase()) {
+                if expr_text.chars().next().is_some_and(|c| c.is_uppercase()) {
                     return Some(CallTarget::Static {
                         class: expr_text.to_string(),
                         method,

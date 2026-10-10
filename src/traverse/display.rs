@@ -111,13 +111,11 @@ pub fn print_nav(entries: &[NavEntry], label: &str) {
     while i < entries.len() {
         let entry = &entries[i];
         let is_external = matches!(entry.kind, EdgeKind::External);
-        let marker = if entry.kind.is_dispatch() {
-            "►"
-        } else if is_external {
-            " "
-        } else {
-            " "
-        };
+        // Two arms of this used to be the same string, so the external test decided
+        // nothing. Collapsed rather than given a different marker: which marker an
+        // external edge should carry is a presentation decision, and picking one here
+        // would change output nobody asked to change.
+        let marker = if entry.kind.is_dispatch() { "►" } else { " " };
 
         if is_external {
             println!(

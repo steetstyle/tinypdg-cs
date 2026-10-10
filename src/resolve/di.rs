@@ -19,6 +19,12 @@ pub struct DiContainer {
     pub registrations: HashMap<String, Vec<DiRegistration>>,
 }
 
+impl Default for DiContainer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DiContainer {
     pub fn new() -> Self {
         DiContainer {

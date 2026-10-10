@@ -196,7 +196,7 @@ fn main() {
         total_files += 1;
     }
 
-    let tg = all_tg.unwrap_or_else(|| tiny_pdg_cs::resolve::types::TypeGraph::new());
+    let tg = all_tg.unwrap_or_default();
     println!(
         "Files: {}/{} (errors: {})",
         total_files,
@@ -270,7 +270,7 @@ fn collect_cs_files(dir: &str, files: &mut Vec<String>) {
             let path = entry.path();
             if path.is_dir() {
                 collect_cs_files(&path.to_string_lossy(), files);
-            } else if path.extension().map_or(false, |e| e == "cs") {
+            } else if path.extension().is_some_and(|e| e == "cs") {
                 files.push(path.to_string_lossy().to_string());
             }
         }

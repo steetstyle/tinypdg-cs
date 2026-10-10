@@ -255,9 +255,7 @@ pub fn diff_impact_to_dot(result: &DiffImpactResult, title: &str) -> String {
     let mut dot = String::new();
 
     // Summary section
-    dot.push_str(&format!(
-        "digraph DiffImpact {{\n  rankdir=BT;\n  node [shape=box style=rounded];\n\n"
-    ));
+    dot.push_str("digraph DiffImpact {\n  rankdir=BT;\n  node [shape=box style=rounded];\n\n");
     dot.push_str(&format!(
         "  label=\"{}\";\n  labelloc=t;\n  fontsize=14;\n\n",
         title

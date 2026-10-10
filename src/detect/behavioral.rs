@@ -308,7 +308,7 @@ fn detect_mediator(ctx: &DetectionContext, results: &mut Vec<PatternMatch>) {
                 c.caller_class == implementor.name
                     && !c.callee_class.is_empty()
                     && c.callee_class != implementor.name
-                    && !implementor.interfaces.iter().any(|i| c.callee_class == *i)
+                    && !implementor.interfaces.contains(&c.callee_class)
                     && !ctx.type_graph.interfaces.contains_key(&c.callee_class)
             });
             if !calls_components {
@@ -468,7 +468,7 @@ fn detect_dotnet_mediator(ctx: &DetectionContext, results: &mut Vec<PatternMatch
                     .classes
                     .values()
                     .find(|c| !c.is_abstract && c.interfaces.iter().any(|i| i == med_name));
-                mediator_class.map_or(true, |mc| !mc.interfaces.iter().any(|i| i == *h_name))
+                mediator_class.is_none_or(|mc| !mc.interfaces.iter().any(|i| i == *h_name))
             })
             .collect();
         if handler_ifaces.len() >= 2 {
@@ -495,7 +495,7 @@ fn detect_dotnet_mediator(ctx: &DetectionContext, results: &mut Vec<PatternMatch
     // Path 2: graph-based structural detection (real projects like eShop)
     // Requires at least 2 handler classes AND dispatch calls (Send/Publish).
     if handler_classes.len() >= 2 && dispatch_count >= 1 {
-        let conf = if has_mediatr_reg || behavior_classes.len() >= 1 {
+        let conf = if has_mediatr_reg || !behavior_classes.is_empty() {
             0.85
         } else {
             0.70
@@ -676,7 +676,7 @@ fn detect_visitor(ctx: &DetectionContext, results: &mut Vec<PatternMatch>) {
         if comp_non_accessor.len() != 1 {
             continue;
         }
-        if return_type_of(&comp_non_accessor[0]) != "void" {
+        if return_type_of(comp_non_accessor[0]) != "void" {
             continue;
         }
 
@@ -805,7 +805,7 @@ fn detect_interpreter(ctx: &DetectionContext, results: &mut Vec<PatternMatch>) {
 
         let implementors = ctx.type_graph.concrete_subclasses(iface_name);
         if implementors.len() >= 2 {
-            let rt = return_type_of(&non_accessor[0]);
+            let rt = return_type_of(non_accessor[0]);
             if rt != "void" {
                 results.push(PatternMatch {
                     pattern: PatternKind::Interpreter,
@@ -980,7 +980,7 @@ mod tests {
             &st.type_graph,
         );
         // Merge type_graphs
-        for (name, _info) in &st.type_graph.classes {
+        for name in st.type_graph.classes.keys() {
             let n = name.clone();
             tg.classes.entry(n.clone()).or_insert_with(|| ClassInfo {
                 name: n,

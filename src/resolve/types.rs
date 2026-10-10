@@ -243,10 +243,10 @@ impl TypeGraph {
 
     fn implements_interface(&self, class: &ClassInfo, iface: &str) -> bool {
         class.interfaces.iter().any(|i| i == iface)
-            || class.base_class.as_ref().map_or(false, |base| {
+            || class.base_class.as_ref().is_some_and(|base| {
                 self.classes
                     .get(base)
-                    .map_or(false, |c| self.implements_interface(c, iface))
+                    .is_some_and(|c| self.implements_interface(c, iface))
             })
     }
 

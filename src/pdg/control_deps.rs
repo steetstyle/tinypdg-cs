@@ -204,6 +204,6 @@ mod tests {
             .find(|i| cfg[*i].kind == BlockKind::Exit)
             .unwrap();
         let deps = compute_control_deps(&cfg, entry, exit);
-        assert!(deps.len() > 0);
+        assert!(!deps.is_empty());
     }
 }

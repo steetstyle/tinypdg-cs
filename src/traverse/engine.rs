@@ -13,11 +13,11 @@ pub fn run(state: &mut TraversalState, tg: &TypeGraph, cg: &CallGraph) -> Result
     loop {
         display::print_header(state);
         display::print_code(state, tg, cg);
-        println!("  {} Down (calls):", "↓");
+        println!("  ↓ Down (calls):");
         display::print_nav(&state.down, "↓");
-        println!("  {} Up (called by):", "↑");
+        println!("  ↑ Up (called by):");
         display::print_nav(&state.up, "↑");
-        println!("  {} Dispatch (type-flow):", "⤴");
+        println!("  ⤴ Dispatch (type-flow):");
         display::print_nav(&state.up_dispatch, "⤴");
 
         display::print_prompt();
@@ -124,8 +124,8 @@ pub fn parse_action(input: &str) -> Action {
         return Action::Discard;
     }
 
-    if input.starts_with('c') {
-        let rest = input[1..].trim();
+    if let Some(rest) = input.strip_prefix('c') {
+        let rest = rest.trim();
         let judgment = match rest {
             "p" | "primary" => Judgment::Primary,
             "s" | "symptom" => Judgment::Symptom,
@@ -135,8 +135,8 @@ pub fn parse_action(input: &str) -> Action {
         return Action::Complete(judgment);
     }
 
-    if input.starts_with('u') {
-        let rest = input[1..].trim();
+    if let Some(rest) = input.strip_prefix('u') {
+        let rest = rest.trim();
         let num: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
         if let Ok(n) = num.parse::<usize>() {
             let after_num = &rest[num.len()..];
