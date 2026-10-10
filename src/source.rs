@@ -341,6 +341,11 @@ fn update(slug: &str, dir: &Path, reference: Option<&str>) -> anyhow::Result<Pat
 
     let status = git(dir)
         .args(["fetch", "--depth", "1", "origin", wanted])
+        // git narrates every fetch to stderr. On a cache hit that is a line of noise
+        // before the tool's own output, and nothing here needs it: success is the exit
+        // code and a warning is already logged when it fails.
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
         .status();
 
     // A failed fetch is not fatal: a checkout from an earlier run is still a usable
