@@ -36,7 +36,10 @@ impl DiContainer {
 
     /// Find all implementations for an interface
     pub fn resolve(&self, interface: &str) -> Vec<&DiRegistration> {
-        self.registrations.get(interface).map(|v| v.iter().collect()).unwrap_or_default()
+        self.registrations
+            .get(interface)
+            .map(|v| v.iter().collect())
+            .unwrap_or_default()
     }
 }
 
@@ -45,10 +48,7 @@ impl DiContainer {
 /// - `services.AddScoped<IFoo, Foo>();`
 /// - `services.AddSingleton<IFoo>(sp => new Foo());`
 /// - `services.AddTransient<IFoo, Foo>();`
-pub fn scan_di_registrations(
-    _source: &str,
-    _type_graph: &TypeGraph,
-) -> DiContainer {
+pub fn scan_di_registrations(_source: &str, _type_graph: &TypeGraph) -> DiContainer {
     // Stub: real implementation scans AST for AddScoped/AddSingleton calls
     DiContainer::new()
 }
@@ -81,14 +81,17 @@ pub fn resolve_di(
     let resolved: Vec<MethodDescriptor> = registrations
         .iter()
         .filter_map(|reg| {
-            _type_graph.classes.get(&reg.implementation_type).map(|cls| {
-                // Return a method descriptor for the implementation class
-                // (without specific method - caller must resolve further)
-                MethodDescriptor {
-                    class: cls.name.clone(),
-                    ..Default::default()
-                }
-            })
+            _type_graph
+                .classes
+                .get(&reg.implementation_type)
+                .map(|cls| {
+                    // Return a method descriptor for the implementation class
+                    // (without specific method - caller must resolve further)
+                    MethodDescriptor {
+                        class: cls.name.clone(),
+                        ..Default::default()
+                    }
+                })
         })
         .collect();
 
@@ -118,11 +121,10 @@ pub fn classify_di_call(node: tree_sitter::Node, source: &str) -> Option<CallTar
     }
     let func = node.child_by_field_name("function")?;
     let method_name = match func.kind() {
-        "member_access_expression" => {
-            func.child_by_field_name("name")
-                .and_then(|n| n.utf8_text(source.as_bytes()).ok())
-                .map(|s| s.to_string())
-        }
+        "member_access_expression" => func
+            .child_by_field_name("name")
+            .and_then(|n| n.utf8_text(source.as_bytes()).ok())
+            .map(|s| s.to_string()),
         _ => None,
     }?;
 
@@ -130,11 +132,15 @@ pub fn classify_di_call(node: tree_sitter::Node, source: &str) -> Option<CallTar
     match method_name.as_str() {
         "AddScoped" | "AddSingleton" | "AddTransient" => {
             // Extract type argument if available
-            let type_args = node.child_by_field_name("type_arguments")
+            let type_args = node
+                .child_by_field_name("type_arguments")
                 .and_then(|n| n.utf8_text(source.as_bytes()).ok());
             if let Some(args) = type_args {
                 // args looks like "<IFoo, Foo>" or "<IFoo>"
-                let clean = args.trim_start_matches('<').trim_end_matches('>').to_string();
+                let clean = args
+                    .trim_start_matches('<')
+                    .trim_end_matches('>')
+                    .to_string();
                 let parts: Vec<&str> = clean.split(',').map(|s| s.trim()).collect();
                 if let Some(iface) = parts.first() {
                     return Some(CallTarget::Static {
@@ -146,7 +152,8 @@ pub fn classify_di_call(node: tree_sitter::Node, source: &str) -> Option<CallTar
             None
         }
         "GetService" | "GetRequiredService" | "GetKeyedService" => {
-            let type_args = node.child_by_field_name("type_arguments")
+            let type_args = node
+                .child_by_field_name("type_arguments")
                 .and_then(|n| n.utf8_text(source.as_bytes()).ok());
             if let Some(args) = type_args {
                 let iface = args.trim_start_matches('<').trim_end_matches('>').trim();
@@ -197,16 +204,19 @@ mod tests {
             confidence: Confidence::DiRegistration,
         });
         let mut tg = TypeGraph::new();
-        tg.classes.insert("Foo".into(), crate::resolve::types::ClassInfo {
-            name: "Foo".into(),
-            base_class: None,
-            interfaces: vec!["IFoo".into()],
-            methods: vec![],
-            fields: vec![],
-            is_abstract: false,
-            is_sealed: false,
-            is_static: false,
-        });
+        tg.classes.insert(
+            "Foo".into(),
+            crate::resolve::types::ClassInfo {
+                name: "Foo".into(),
+                base_class: None,
+                interfaces: vec!["IFoo".into()],
+                methods: vec![],
+                fields: vec![],
+                is_abstract: false,
+                is_sealed: false,
+                is_static: false,
+            },
+        );
         let target = CallTarget::DiResolved {
             interface: "IFoo".into(),
             method: "GetService".into(),

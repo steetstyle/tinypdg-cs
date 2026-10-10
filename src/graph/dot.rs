@@ -8,11 +8,9 @@ pub fn cfg_to_dot(graph: &petgraph::graph::DiGraph<BasicBlock, BlockEdge>) -> St
     format!("{}", Dot::new(graph))
 }
 
-pub fn pdg_to_dot(
-    pdg: &petgraph::graph::DiGraph<BasicBlock, PdgEdge>,
-    title: &str,
-) -> String {
-    let mut dot = String::from("digraph PDG {\n  rankdir=TB;\n  node [shape=box style=rounded];\n\n");
+pub fn pdg_to_dot(pdg: &petgraph::graph::DiGraph<BasicBlock, PdgEdge>, title: &str) -> String {
+    let mut dot =
+        String::from("digraph PDG {\n  rankdir=TB;\n  node [shape=box style=rounded];\n\n");
     if !title.is_empty() {
         dot.push_str(&format!("  label=\"{}\";\n  labelloc=t;\n\n", title));
     }
@@ -40,8 +38,8 @@ pub fn pdg_write_nodes_edges(
 ) {
     for idx in pdg.node_indices() {
         let block = &pdg[idx];
-        let label = format!("L{}-{}:{}", block.start_line, block.end_line, block.kind)
-            .replace('"', "'");
+        let label =
+            format!("L{}-{}:{}", block.start_line, block.end_line, block.kind).replace('"', "'");
         let color = match block.kind {
             BlockKind::Entry => "green",
             BlockKind::Exit => "red",

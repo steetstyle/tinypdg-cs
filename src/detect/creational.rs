@@ -16,7 +16,9 @@ fn return_type_of(m: &crate::resolve::types::MethodDescriptor) -> &str {
 
 fn detect_singleton(ctx: &DetectionContext, results: &mut Vec<PatternMatch>) {
     for class in ctx.type_graph.classes.values() {
-        let self_returning_statics: Vec<_> = class.methods.iter()
+        let self_returning_statics: Vec<_> = class
+            .methods
+            .iter()
             .filter(|m| m.is_static && return_type_of(m) == class.name)
             .collect();
 
@@ -30,7 +32,10 @@ fn detect_singleton(ctx: &DetectionContext, results: &mut Vec<PatternMatch>) {
                 ),
                 confidence: 0.9,
                 participants: vec![class.name.clone()],
-                evidence: self_returning_statics.iter().map(|m| m.method.clone()).collect(),
+                evidence: self_returning_statics
+                    .iter()
+                    .map(|m| m.method.clone())
+                    .collect(),
             });
         }
     }
@@ -40,11 +45,17 @@ fn detect_factory_methods(ctx: &DetectionContext, results: &mut Vec<PatternMatch
     for class in ctx.type_graph.classes.values() {
         for m in &class.methods {
             let rt = return_type_of(m);
-            if rt == "void" || rt == class.name { continue; }
+            if rt == "void" || rt == class.name {
+                continue;
+            }
 
             let is_iface = ctx.type_graph.interfaces.contains_key(rt);
-            let is_abstract = ctx.type_graph.classes.get(rt)
-                .map(|c| c.is_abstract).unwrap_or(false);
+            let is_abstract = ctx
+                .type_graph
+                .classes
+                .get(rt)
+                .map(|c| c.is_abstract)
+                .unwrap_or(false);
 
             if is_iface || is_abstract {
                 results.push(PatternMatch {
@@ -62,7 +73,9 @@ fn detect_factory_methods(ctx: &DetectionContext, results: &mut Vec<PatternMatch
 
 fn detect_abstract_factory(ctx: &DetectionContext, results: &mut Vec<PatternMatch>) {
     for (iface_name, iface) in &ctx.type_graph.interfaces {
-        let returns_interfaces: Vec<_> = iface.methods.iter()
+        let returns_interfaces: Vec<_> = iface
+            .methods
+            .iter()
             .filter(|m| {
                 let rt = return_type_of(m);
                 rt != "void" && ctx.type_graph.interfaces.contains_key(rt)
@@ -75,11 +88,15 @@ fn detect_abstract_factory(ctx: &DetectionContext, results: &mut Vec<PatternMatc
                 class: iface_name.clone(),
                 description: format!(
                     "Interface '{}' has {} methods returning interfaces",
-                    iface_name, returns_interfaces.len()
+                    iface_name,
+                    returns_interfaces.len()
                 ),
                 confidence: 0.9,
                 participants: vec![iface_name.clone()],
-                evidence: returns_interfaces.iter().map(|m| m.method.clone()).collect(),
+                evidence: returns_interfaces
+                    .iter()
+                    .map(|m| m.method.clone())
+                    .collect(),
             });
         }
     }
@@ -87,13 +104,19 @@ fn detect_abstract_factory(ctx: &DetectionContext, results: &mut Vec<PatternMatc
 
 fn detect_builder(ctx: &DetectionContext, results: &mut Vec<PatternMatch>) {
     for class in ctx.type_graph.classes.values() {
-        if class.is_abstract { continue; }
+        if class.is_abstract {
+            continue;
+        }
 
-        let self_returning: Vec<_> = class.methods.iter()
+        let self_returning: Vec<_> = class
+            .methods
+            .iter()
             .filter(|m| !m.is_static && return_type_of(m) == class.name)
             .collect();
 
-        let returns_other: Vec<_> = class.methods.iter()
+        let returns_other: Vec<_> = class
+            .methods
+            .iter()
             .filter(|m| {
                 let rt = return_type_of(m);
                 rt != "void" && rt != class.name
@@ -106,7 +129,9 @@ fn detect_builder(ctx: &DetectionContext, results: &mut Vec<PatternMatch>) {
                 class: class.name.clone(),
                 description: format!(
                     "'{}' has {} fluent methods + {} build methods — builder pattern",
-                    class.name, self_returning.len(), returns_other.len()
+                    class.name,
+                    self_returning.len(),
+                    returns_other.len()
                 ),
                 confidence: 0.85,
                 participants: vec![class.name.clone()],
@@ -145,20 +170,29 @@ mod tests {
     #[test]
     fn test_singleton_instance_returns_self() {
         let mut tg = TypeGraph::new();
-        tg.classes.insert("Config".into(), ClassInfo {
-            name: "Config".into(),
-            base_class: None, interfaces: vec![],
-            methods: vec![MethodDescriptor {
-                class: "Config".into(), method: "get_Instance".into(),
-                signature: "Config get_Instance".into(),
-                is_static: true, is_virtual: false, is_abstract: false,
-file: String::new(),
-line_start: 0,
-line_end: 0
-}],
-            fields: vec![],
-            is_abstract: false, is_sealed: false, is_static: false,
-        });
+        tg.classes.insert(
+            "Config".into(),
+            ClassInfo {
+                name: "Config".into(),
+                base_class: None,
+                interfaces: vec![],
+                methods: vec![MethodDescriptor {
+                    class: "Config".into(),
+                    method: "get_Instance".into(),
+                    signature: "Config get_Instance".into(),
+                    is_static: true,
+                    is_virtual: false,
+                    is_abstract: false,
+                    file: String::new(),
+                    line_start: 0,
+                    line_end: 0,
+                }],
+                fields: vec![],
+                is_abstract: false,
+                is_sealed: false,
+                is_static: false,
+            },
+        );
         let ctx = DetectionContext::new(&tg, "");
         let r = detect_creational(&ctx);
         assert!(r.iter().any(|m| m.pattern == PatternKind::Singleton));
@@ -167,22 +201,36 @@ line_end: 0
     #[test]
     fn test_factory_method_returns_interface() {
         let mut tg = TypeGraph::new();
-        tg.interfaces.insert("IService".into(), InterfaceInfo {
-            name: "IService".into(), methods: vec![],
-        });
-        tg.classes.insert("Factory".into(), ClassInfo {
-            name: "Factory".into(), base_class: None, interfaces: vec![],
-            methods: vec![MethodDescriptor {
-                class: "Factory".into(), method: "Make".into(),
-                signature: "IService Make".into(),
-                is_static: false, is_virtual: false, is_abstract: false,
-file: String::new(),
-line_start: 0,
-line_end: 0
-}],
-            fields: vec![],
-            is_abstract: false, is_sealed: false, is_static: false,
-        });
+        tg.interfaces.insert(
+            "IService".into(),
+            InterfaceInfo {
+                name: "IService".into(),
+                methods: vec![],
+            },
+        );
+        tg.classes.insert(
+            "Factory".into(),
+            ClassInfo {
+                name: "Factory".into(),
+                base_class: None,
+                interfaces: vec![],
+                methods: vec![MethodDescriptor {
+                    class: "Factory".into(),
+                    method: "Make".into(),
+                    signature: "IService Make".into(),
+                    is_static: false,
+                    is_virtual: false,
+                    is_abstract: false,
+                    file: String::new(),
+                    line_start: 0,
+                    line_end: 0,
+                }],
+                fields: vec![],
+                is_abstract: false,
+                is_sealed: false,
+                is_static: false,
+            },
+        );
         let ctx = DetectionContext::new(&tg, "");
         let r = detect_creational(&ctx);
         assert!(r.iter().any(|m| m.pattern == PatternKind::FactoryMethod));
@@ -191,33 +239,50 @@ line_end: 0
     #[test]
     fn test_abstract_factory_interface() {
         let mut tg = TypeGraph::new();
-        tg.interfaces.insert("IWidgetFactory".into(), InterfaceInfo {
-            name: "IWidgetFactory".into(),
-            methods: vec![
-                MethodDescriptor {
-                    class: "IWidgetFactory".into(), method: "MakeButton".into(),
-                    signature: "IButton MakeButton".into(),
-                    is_static: false, is_virtual: false, is_abstract: false,
-file: String::new(),
-line_start: 0,
-line_end: 0
-},
-                MethodDescriptor {
-                    class: "IWidgetFactory".into(), method: "MakeDialog".into(),
-                    signature: "IDialog MakeDialog".into(),
-                    is_static: false, is_virtual: false, is_abstract: false,
-file: String::new(),
-line_start: 0,
-line_end: 0
-},
-            ],
-        });
-        tg.interfaces.insert("IButton".into(), InterfaceInfo {
-            name: "IButton".into(), methods: vec![],
-        });
-        tg.interfaces.insert("IDialog".into(), InterfaceInfo {
-            name: "IDialog".into(), methods: vec![],
-        });
+        tg.interfaces.insert(
+            "IWidgetFactory".into(),
+            InterfaceInfo {
+                name: "IWidgetFactory".into(),
+                methods: vec![
+                    MethodDescriptor {
+                        class: "IWidgetFactory".into(),
+                        method: "MakeButton".into(),
+                        signature: "IButton MakeButton".into(),
+                        is_static: false,
+                        is_virtual: false,
+                        is_abstract: false,
+                        file: String::new(),
+                        line_start: 0,
+                        line_end: 0,
+                    },
+                    MethodDescriptor {
+                        class: "IWidgetFactory".into(),
+                        method: "MakeDialog".into(),
+                        signature: "IDialog MakeDialog".into(),
+                        is_static: false,
+                        is_virtual: false,
+                        is_abstract: false,
+                        file: String::new(),
+                        line_start: 0,
+                        line_end: 0,
+                    },
+                ],
+            },
+        );
+        tg.interfaces.insert(
+            "IButton".into(),
+            InterfaceInfo {
+                name: "IButton".into(),
+                methods: vec![],
+            },
+        );
+        tg.interfaces.insert(
+            "IDialog".into(),
+            InterfaceInfo {
+                name: "IDialog".into(),
+                methods: vec![],
+            },
+        );
         let ctx = DetectionContext::new(&tg, "");
         let r = detect_creational(&ctx);
         assert!(r.iter().any(|m| m.pattern == PatternKind::AbstractFactory));
@@ -226,22 +291,53 @@ line_end: 0
     #[test]
     fn test_builder_fluent_methods() {
         let mut tg = TypeGraph::new();
-        tg.classes.insert("HtmlBuilder".into(), ClassInfo {
-            name: "HtmlBuilder".into(), base_class: None, interfaces: vec![],
-            methods: vec![
-                MethodDescriptor { class: "HtmlBuilder".into(), method: "SetTitle".into(),
-                    signature: "HtmlBuilder SetTitle".into(),
-                    is_static: false, is_virtual: false, is_abstract: false, file: String::new(), line_start: 0, line_end: 0 },
-                MethodDescriptor { class: "HtmlBuilder".into(), method: "SetBody".into(),
-                    signature: "HtmlBuilder SetBody".into(),
-                    is_static: false, is_virtual: false, is_abstract: false, file: String::new(), line_start: 0, line_end: 0 },
-                MethodDescriptor { class: "HtmlBuilder".into(), method: "Build".into(),
-                    signature: "string Build".into(),
-                    is_static: false, is_virtual: false, is_abstract: false, file: String::new(), line_start: 0, line_end: 0 },
-            ],
-            fields: vec![],
-            is_abstract: false, is_sealed: false, is_static: false,
-        });
+        tg.classes.insert(
+            "HtmlBuilder".into(),
+            ClassInfo {
+                name: "HtmlBuilder".into(),
+                base_class: None,
+                interfaces: vec![],
+                methods: vec![
+                    MethodDescriptor {
+                        class: "HtmlBuilder".into(),
+                        method: "SetTitle".into(),
+                        signature: "HtmlBuilder SetTitle".into(),
+                        is_static: false,
+                        is_virtual: false,
+                        is_abstract: false,
+                        file: String::new(),
+                        line_start: 0,
+                        line_end: 0,
+                    },
+                    MethodDescriptor {
+                        class: "HtmlBuilder".into(),
+                        method: "SetBody".into(),
+                        signature: "HtmlBuilder SetBody".into(),
+                        is_static: false,
+                        is_virtual: false,
+                        is_abstract: false,
+                        file: String::new(),
+                        line_start: 0,
+                        line_end: 0,
+                    },
+                    MethodDescriptor {
+                        class: "HtmlBuilder".into(),
+                        method: "Build".into(),
+                        signature: "string Build".into(),
+                        is_static: false,
+                        is_virtual: false,
+                        is_abstract: false,
+                        file: String::new(),
+                        line_start: 0,
+                        line_end: 0,
+                    },
+                ],
+                fields: vec![],
+                is_abstract: false,
+                is_sealed: false,
+                is_static: false,
+            },
+        );
         let ctx = DetectionContext::new(&tg, "");
         let r = detect_creational(&ctx);
         assert!(r.iter().any(|m| m.pattern == PatternKind::Builder));
@@ -250,12 +346,19 @@ line_end: 0
     #[test]
     fn test_prototype_icloneable() {
         let mut tg = TypeGraph::new();
-        tg.classes.insert("Entity".into(), ClassInfo {
-            name: "Entity".into(), base_class: None,
-            interfaces: vec!["ICloneable".into()],
-            fields: vec![],
-            methods: vec![], is_abstract: false, is_sealed: false, is_static: false,
-        });
+        tg.classes.insert(
+            "Entity".into(),
+            ClassInfo {
+                name: "Entity".into(),
+                base_class: None,
+                interfaces: vec!["ICloneable".into()],
+                fields: vec![],
+                methods: vec![],
+                is_abstract: false,
+                is_sealed: false,
+                is_static: false,
+            },
+        );
         let ctx = DetectionContext::new(&tg, "");
         let r = detect_creational(&ctx);
         assert!(r.iter().any(|m| m.pattern == PatternKind::Prototype));

@@ -9,10 +9,12 @@ use tree_sitter::{Parser, Tree};
 /// Bir `.cs` dosyasını tree-sitter ile parse eder.
 pub fn parse_file(path: &str) -> Result<Tree> {
     let mut parser = Parser::new();
-    parser.set_language(&tree_sitter_c_sharp::LANGUAGE.into())
+    parser
+        .set_language(&tree_sitter_c_sharp::LANGUAGE.into())
         .map_err(|e| anyhow::anyhow!("Failed to set C# language: {}", e))?;
     let source = std::fs::read_to_string(path)?;
-    let tree = parser.parse(&source, None)
+    let tree = parser
+        .parse(&source, None)
         .ok_or_else(|| anyhow::anyhow!("Failed to parse {}", path))?;
     Ok(tree)
 }
@@ -20,9 +22,11 @@ pub fn parse_file(path: &str) -> Result<Tree> {
 /// Bir string'i tree-sitter ile parse eder (testler için).
 pub fn parse_source(source: &str) -> Result<Tree> {
     let mut parser = Parser::new();
-    parser.set_language(&tree_sitter_c_sharp::LANGUAGE.into())
+    parser
+        .set_language(&tree_sitter_c_sharp::LANGUAGE.into())
         .map_err(|e| anyhow::anyhow!("Failed to set C# language: {}", e))?;
-    let tree = parser.parse(source, None)
+    let tree = parser
+        .parse(source, None)
         .ok_or_else(|| anyhow::anyhow!("Failed to parse source"))?;
     Ok(tree)
 }

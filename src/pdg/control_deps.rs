@@ -94,9 +94,9 @@ impl PostDominators {
             common.remove(&v);
 
             // En yakın post-dominator (idom)
-            idoms[v.index()] = common.into_iter().min_by_key(|&c| {
-                cfg.neighbors(v).filter(|&n| n == c).count()
-            });
+            idoms[v.index()] = common
+                .into_iter()
+                .min_by_key(|&c| cfg.neighbors(v).filter(|&n| n == c).count());
         }
 
         Self { idoms }
@@ -179,17 +179,30 @@ mod tests {
     #[test]
     fn test_sequential_no_control_deps() {
         let cfg = build_cfg("class C { void M() { int a = 1; int b = 2; } }").unwrap();
-        let entry = cfg.node_indices().find(|i| cfg[*i].kind == BlockKind::Entry).unwrap();
-        let exit = cfg.node_indices().find(|i| cfg[*i].kind == BlockKind::Exit).unwrap();
+        let entry = cfg
+            .node_indices()
+            .find(|i| cfg[*i].kind == BlockKind::Entry)
+            .unwrap();
+        let exit = cfg
+            .node_indices()
+            .find(|i| cfg[*i].kind == BlockKind::Exit)
+            .unwrap();
         let deps = compute_control_deps(&cfg, entry, exit);
         assert_eq!(deps.len(), 0);
     }
 
     #[test]
     fn test_if_has_control_deps() {
-        let cfg = build_cfg("class C { void M() { if (true) { foo(); } else { bar(); } } }").unwrap();
-        let entry = cfg.node_indices().find(|i| cfg[*i].kind == BlockKind::Entry).unwrap();
-        let exit = cfg.node_indices().find(|i| cfg[*i].kind == BlockKind::Exit).unwrap();
+        let cfg =
+            build_cfg("class C { void M() { if (true) { foo(); } else { bar(); } } }").unwrap();
+        let entry = cfg
+            .node_indices()
+            .find(|i| cfg[*i].kind == BlockKind::Entry)
+            .unwrap();
+        let exit = cfg
+            .node_indices()
+            .find(|i| cfg[*i].kind == BlockKind::Exit)
+            .unwrap();
         let deps = compute_control_deps(&cfg, entry, exit);
         assert!(deps.len() > 0);
     }

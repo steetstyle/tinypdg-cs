@@ -4,17 +4,13 @@
 //! - Factory method patterns: `Create()`, `Build()` → concrete type [80%]
 //! - Conditional factory: lambda with if/switch branching
 
-use crate::resolve::types::{
-    CallSite, CallTarget, Confidence, FactoryDescriptor, TypeGraph,
-};
+use crate::resolve::types::{CallSite, CallTarget, Confidence, FactoryDescriptor, TypeGraph};
 
 /// Detect factory patterns in the AST:
 /// - Methods named `Create`, `Build`, `Make`, `Resolve`
 /// - Methods returning an interface/abstract type
 /// - Lambda expressions that construct objects
-pub fn detect_factories(
-    _type_graph: &TypeGraph,
-) -> Vec<FactoryDescriptor> {
+pub fn detect_factories(_type_graph: &TypeGraph) -> Vec<FactoryDescriptor> {
     // Stub: real implementation scans methods for factory patterns
     Vec::new()
 }

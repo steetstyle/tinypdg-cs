@@ -3,9 +3,7 @@
 //! Given an abstract class with abstract methods, find all
 //! concrete implementations via CHA.
 
-use crate::resolve::types::{
-    CallSite, CallTarget, Confidence, MethodDescriptor, TypeGraph,
-};
+use crate::resolve::types::{CallSite, CallTarget, Confidence, MethodDescriptor, TypeGraph};
 
 /// Resolve an abstract method call to concrete implementations
 pub fn resolve_abstract(
@@ -15,7 +13,11 @@ pub fn resolve_abstract(
 ) -> Vec<CallSite> {
     let (class_name, method) = match target {
         CallTarget::Abstract { interface, method } => (interface.as_str(), method.as_str()),
-        CallTarget::Static { class, method } | CallTarget::Virtual { class: Some(class), method } => {
+        CallTarget::Static { class, method }
+        | CallTarget::Virtual {
+            class: Some(class),
+            method,
+        } => {
             // Also handle abstract base class calls
             match type_graph.classes.get(class) {
                 Some(c) if c.is_abstract => (class.as_str(), method.as_str()),
@@ -44,10 +46,10 @@ pub fn resolve_abstract(
                 is_static: false,
                 is_virtual: false,
                 is_abstract: false,
-file: String::new(),
-line_start: 0,
-line_end: 0
-});
+                file: String::new(),
+                line_start: 0,
+                line_end: 0,
+            });
         }
     }
 
@@ -76,46 +78,52 @@ mod tests {
 
     fn make_abstract_graph() -> TypeGraph {
         let mut tg = TypeGraph::new();
-        tg.classes.insert("AbstractBase".into(), ClassInfo {
-            name: "AbstractBase".into(),
-            base_class: None,
-            interfaces: vec![],
-            methods: vec![MethodDescriptor {
-                class: "AbstractBase".into(),
-                method: "DoWork".into(),
-                signature: "void DoWork".into(),
-                is_static: false,
-                is_virtual: false,
+        tg.classes.insert(
+            "AbstractBase".into(),
+            ClassInfo {
+                name: "AbstractBase".into(),
+                base_class: None,
+                interfaces: vec![],
+                methods: vec![MethodDescriptor {
+                    class: "AbstractBase".into(),
+                    method: "DoWork".into(),
+                    signature: "void DoWork".into(),
+                    is_static: false,
+                    is_virtual: false,
+                    is_abstract: true,
+                    file: String::new(),
+                    line_start: 0,
+                    line_end: 0,
+                }],
+                fields: vec![],
                 is_abstract: true,
-file: String::new(),
-line_start: 0,
-line_end: 0
-}],
-            fields: vec![],
-            is_abstract: true,
-            is_sealed: false,
-            is_static: false,
-        });
-        tg.classes.insert("Concrete".into(), ClassInfo {
-            name: "Concrete".into(),
-            base_class: Some("AbstractBase".into()),
-            interfaces: vec![],
-            methods: vec![MethodDescriptor {
-                class: "Concrete".into(),
-                method: "DoWork".into(),
-                signature: "void DoWork".into(),
+                is_sealed: false,
                 is_static: false,
-                is_virtual: false,
+            },
+        );
+        tg.classes.insert(
+            "Concrete".into(),
+            ClassInfo {
+                name: "Concrete".into(),
+                base_class: Some("AbstractBase".into()),
+                interfaces: vec![],
+                methods: vec![MethodDescriptor {
+                    class: "Concrete".into(),
+                    method: "DoWork".into(),
+                    signature: "void DoWork".into(),
+                    is_static: false,
+                    is_virtual: false,
+                    is_abstract: false,
+                    file: String::new(),
+                    line_start: 0,
+                    line_end: 0,
+                }],
+                fields: vec![],
                 is_abstract: false,
-file: String::new(),
-line_start: 0,
-line_end: 0
-}],
-            fields: vec![],
-            is_abstract: false,
-            is_sealed: false,
-            is_static: false,
-        });
+                is_sealed: false,
+                is_static: false,
+            },
+        );
         tg
     }
 

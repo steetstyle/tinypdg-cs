@@ -54,29 +54,34 @@ impl CallGraph {
 
     /// Does class `name` call any method named `method`?
     pub fn class_calls_method(&self, name: &str, method: &str) -> bool {
-        self.class_callees.get(name)
+        self.class_callees
+            .get(name)
             .map(|s| s.iter().any(|m| m == method))
             .unwrap_or(false)
     }
 
     /// Does class `name` construct type `ty` via `new`?
     pub fn class_creates_type(&self, name: &str, ty: &str) -> bool {
-        self.class_creations.get(name)
+        self.class_creations
+            .get(name)
             .map(|s| s.contains(ty))
             .unwrap_or(false)
     }
 
     /// Get the number of `new` expressions in a class that return a given type
     pub fn creation_count(&self, class: &str, ty: &str) -> usize {
-        self.calls.iter()
-            .filter(|c| c.caller_class == class && c.is_creation
-                && c.created_type.as_deref() == Some(ty))
+        self.calls
+            .iter()
+            .filter(|c| {
+                c.caller_class == class && c.is_creation && c.created_type.as_deref() == Some(ty)
+            })
             .count()
     }
 
     /// Get all types created via `new` in a class
     pub fn created_types(&self, class: &str) -> Vec<&str> {
-        self.class_creations.get(class)
+        self.class_creations
+            .get(class)
             .map(|s| s.iter().map(|s| s.as_str()).collect())
             .unwrap_or_default()
     }
@@ -97,14 +102,16 @@ impl CallGraphBuilder {
             let node = cursor.node();
             match node.kind() {
                 "class_declaration" => {
-                    if let Some(name) = node.child_by_field_name("name")
+                    if let Some(name) = node
+                        .child_by_field_name("name")
                         .and_then(|n| n.utf8_text(source.as_bytes()).ok())
                     {
                         current_class = name.to_string();
                     }
                 }
                 "method_declaration" | "constructor_declaration" => {
-                    if let Some(name) = node.child_by_field_name("name")
+                    if let Some(name) = node
+                        .child_by_field_name("name")
                         .and_then(|n| n.utf8_text(source.as_bytes()).ok())
                     {
                         current_method = name.to_string();
@@ -112,18 +119,25 @@ impl CallGraphBuilder {
                 }
                 "invocation_expression" => {
                     if !current_class.is_empty() && !current_method.is_empty() {
-                        if let Some(site) = Self::extract_call(node, source, &current_class, &current_method, type_graph) {
+                        if let Some(site) = Self::extract_call(
+                            node,
+                            source,
+                            &current_class,
+                            &current_method,
+                            type_graph,
+                        ) {
                             cg.calls.push(site.clone());
-                            cg.class_callees.entry(current_class.clone())
+                            cg.class_callees
+                                .entry(current_class.clone())
                                 .or_default()
                                 .insert(site.callee.clone());
-                            cg.method_calls.entry(format!("{}.{}", current_class, current_method))
+                            cg.method_calls
+                                .entry(format!("{}.{}", current_class, current_method))
                                 .or_default()
                                 .push(site.callee.clone());
                         }
                     }
                 }
-
 
                 "object_creation_expression" => {
                     if !current_class.is_empty() {
@@ -131,7 +145,8 @@ impl CallGraphBuilder {
                             let child = node.child(i).unwrap();
                             if child.kind() == "identifier" {
                                 if let Ok(ty) = child.utf8_text(source.as_bytes()) {
-                                    cg.class_creations.entry(current_class.clone())
+                                    cg.class_creations
+                                        .entry(current_class.clone())
                                         .or_default()
                                         .insert(ty.to_string());
                                 }
@@ -161,18 +176,29 @@ impl CallGraphBuilder {
                 let parent = cursor.node();
                 if parent.kind() == "class_declaration" {
                     current_class.clear();
-                } else if parent.kind() == "method_declaration" || parent.kind() == "constructor_declaration" {
+                } else if parent.kind() == "method_declaration"
+                    || parent.kind() == "constructor_declaration"
+                {
                     current_method.clear();
                 }
             }
         }
     }
 
-    fn caller_class_info<'a>(type_graph: &'a TypeGraph, caller_class: &str) -> Option<&'a ClassInfo> {
+    fn caller_class_info<'a>(
+        type_graph: &'a TypeGraph,
+        caller_class: &str,
+    ) -> Option<&'a ClassInfo> {
         type_graph.classes.get(caller_class)
     }
 
-    fn extract_call(node: Node, source: &str, caller_class: &str, caller_method: &str, type_graph: &TypeGraph) -> Option<CallSite> {
+    fn extract_call(
+        node: Node,
+        source: &str,
+        caller_class: &str,
+        caller_method: &str,
+        type_graph: &TypeGraph,
+    ) -> Option<CallSite> {
         let mut callee = String::new();
         let mut target_expr = String::new();
         let mut is_self_call = false;
@@ -212,7 +238,9 @@ impl CallGraphBuilder {
                                         }
                                     }
                                 }
-                            } else if inner.kind() == "identifier" || inner.kind() == "this_expression" {
+                            } else if inner.kind() == "identifier"
+                                || inner.kind() == "this_expression"
+                            {
                                 // target expression (first child before ?)
                                 if let Ok(text) = inner.utf8_text(source.as_bytes()) {
                                     target_expr = text.to_string();
@@ -266,7 +294,9 @@ impl CallGraphBuilder {
                             if let Some(gc) = arg.child(j) {
                                 if gc.kind() == "identifier" {
                                     if let Ok(text) = gc.utf8_text(source.as_bytes()) {
-                                        if caller_class_info.map_or(false, |ci| ci.methods.iter().any(|m| m.method == text)) {
+                                        if caller_class_info.map_or(false, |ci| {
+                                            ci.methods.iter().any(|m| m.method == text)
+                                        }) {
                                             delegates.push(text.to_string());
                                         }
                                     }
@@ -280,14 +310,18 @@ impl CallGraphBuilder {
 
         let callee_class = if is_self_call || target_expr.is_empty() {
             // this.Foo() or Foo() (implicit this) → caller_class
-            if type_graph.classes.get(caller_class)
+            if type_graph
+                .classes
+                .get(caller_class)
                 .map(|c| c.methods.iter().any(|m| m.method == callee))
                 .unwrap_or(false)
             {
                 caller_class.to_string()
             } else {
                 // implicit call but method not in caller — search all classes
-                type_graph.classes.iter()
+                type_graph
+                    .classes
+                    .iter()
                     .find(|(_, ci)| ci.methods.iter().any(|m| m.method == callee))
                     .map(|(name, _)| name.clone())
                     .unwrap_or_default()
@@ -413,6 +447,4 @@ mod tests {
         let site = cg.calls.iter().find(|c| c.callee == "B").unwrap();
         assert_eq!(site.callee_class, "C");
     }
-
-
 }

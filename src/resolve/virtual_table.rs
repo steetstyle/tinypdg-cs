@@ -5,11 +5,7 @@ use std::collections::HashSet;
 use crate::resolve::types::{CallSite, CallTarget, Confidence, MethodDescriptor, TypeGraph};
 
 /// CHA — walk the type hierarchy to find all possible override targets
-pub fn resolve_cha(
-    target: &CallTarget,
-    caller: &str,
-    type_graph: &TypeGraph,
-) -> Vec<CallSite> {
+pub fn resolve_cha(target: &CallTarget, caller: &str, type_graph: &TypeGraph) -> Vec<CallSite> {
     match target {
         CallTarget::Virtual { class, method } => {
             let class_name = class.as_deref().unwrap_or("");
@@ -100,46 +96,52 @@ mod tests {
 
     fn make_type_graph() -> TypeGraph {
         let mut tg = TypeGraph::new();
-        tg.classes.insert("Base".into(), ClassInfo {
-            name: "Base".into(),
-            base_class: None,
-            interfaces: vec![],
-            methods: vec![MethodDescriptor {
-                class: "Base".into(),
-                method: "Foo".into(),
-                signature: "void Foo".into(),
-                is_static: false,
-                is_virtual: true,
+        tg.classes.insert(
+            "Base".into(),
+            ClassInfo {
+                name: "Base".into(),
+                base_class: None,
+                interfaces: vec![],
+                methods: vec![MethodDescriptor {
+                    class: "Base".into(),
+                    method: "Foo".into(),
+                    signature: "void Foo".into(),
+                    is_static: false,
+                    is_virtual: true,
+                    is_abstract: false,
+                    file: String::new(),
+                    line_start: 0,
+                    line_end: 0,
+                }],
+                fields: vec![],
                 is_abstract: false,
-file: String::new(),
-line_start: 0,
-line_end: 0
-}],
-            fields: vec![],
-            is_abstract: false,
-            is_sealed: false,
-            is_static: false,
-        });
-        tg.classes.insert("Derived".into(), ClassInfo {
-            name: "Derived".into(),
-            base_class: Some("Base".into()),
-            interfaces: vec![],
-            methods: vec![MethodDescriptor {
-                class: "Derived".into(),
-                method: "Foo".into(),
-                signature: "void Foo".into(),
+                is_sealed: false,
                 is_static: false,
-                is_virtual: false,
+            },
+        );
+        tg.classes.insert(
+            "Derived".into(),
+            ClassInfo {
+                name: "Derived".into(),
+                base_class: Some("Base".into()),
+                interfaces: vec![],
+                methods: vec![MethodDescriptor {
+                    class: "Derived".into(),
+                    method: "Foo".into(),
+                    signature: "void Foo".into(),
+                    is_static: false,
+                    is_virtual: false,
+                    is_abstract: false,
+                    file: String::new(),
+                    line_start: 0,
+                    line_end: 0,
+                }],
+                fields: vec![],
                 is_abstract: false,
-file: String::new(),
-line_start: 0,
-line_end: 0
-}],
-            fields: vec![],
-            is_abstract: false,
-            is_sealed: false,
-            is_static: false,
-        });
+                is_sealed: false,
+                is_static: false,
+            },
+        );
         tg
     }
 

@@ -5,44 +5,33 @@ use std::collections::HashMap;
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CallTarget {
     /// Static method call: `ClassName.MethodName`
-    Static {
-        class: String,
-        method: String,
-    },
+    Static { class: String, method: String },
     /// Instance method call: `obj.MethodName`
-    Instance {
-        method: String,
-    },
+    Instance { method: String },
     /// Virtual method call: could be overridden
     Virtual {
         class: Option<String>,
         method: String,
     },
     /// Abstract/interface method call
-    Abstract {
-        interface: String,
-        method: String,
-    },
+    Abstract { interface: String, method: String },
     /// DI resolved call: interface → concrete via container
-    DiResolved {
-        interface: String,
-        method: String,
-    },
+    DiResolved { interface: String, method: String },
 }
 
 /// Resolution confidence with numerical ranking (0-100)
 /// Higher = more certain
 #[derive(Debug, Clone, PartialEq)]
 pub enum Confidence {
-    Direct,               // 100
-    ExplicitImpl,         // 95 — single interface impl
-    DiRegistration,       // 95 — AddScoped<IFoo, Foo>()
-    CHA,                  // 70 — class hierarchy analysis
-    MultiImpl,            // 60 — multiple interface implementations
-    RTA,                  // 50 — rapid type analysis
-    Reflection,           // 40 — typeof+GetMethod
-    DynamicString,        // 10 — reflection with runtime string
-    Unknown,              // 0
+    Direct,         // 100
+    ExplicitImpl,   // 95 — single interface impl
+    DiRegistration, // 95 — AddScoped<IFoo, Foo>()
+    CHA,            // 70 — class hierarchy analysis
+    MultiImpl,      // 60 — multiple interface implementations
+    RTA,            // 50 — rapid type analysis
+    Reflection,     // 40 — typeof+GetMethod
+    DynamicString,  // 10 — reflection with runtime string
+    Unknown,        // 0
 }
 
 impl Confidence {
@@ -63,17 +52,22 @@ impl Confidence {
 
 impl std::fmt::Display for Confidence {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}({})", match self {
-            Confidence::Direct => "Direct",
-            Confidence::ExplicitImpl => "ExplicitImpl",
-            Confidence::DiRegistration => "DiRegistration",
-            Confidence::CHA => "CHA",
-            Confidence::MultiImpl => "MultiImpl",
-            Confidence::RTA => "RTA",
-            Confidence::Reflection => "Reflection",
-            Confidence::DynamicString => "DynamicString",
-            Confidence::Unknown => "Unknown",
-        }, self.score())
+        write!(
+            f,
+            "{}({})",
+            match self {
+                Confidence::Direct => "Direct",
+                Confidence::ExplicitImpl => "ExplicitImpl",
+                Confidence::DiRegistration => "DiRegistration",
+                Confidence::CHA => "CHA",
+                Confidence::MultiImpl => "MultiImpl",
+                Confidence::RTA => "RTA",
+                Confidence::Reflection => "Reflection",
+                Confidence::DynamicString => "DynamicString",
+                Confidence::Unknown => "Unknown",
+            },
+            self.score()
+        )
     }
 }
 
@@ -108,7 +102,8 @@ impl ResolutionSet {
 
     /// Pick the best (highest confidence) resolution
     pub fn best(&self) -> &CallSite {
-        self.alternatives.iter()
+        self.alternatives
+            .iter()
             .max_by_key(|a| a.confidence.score())
             .unwrap_or(&self.callsite)
     }
@@ -229,7 +224,8 @@ impl TypeGraph {
 
     /// Find all classes that implement a given interface
     pub fn implementors_of(&self, interface: &str) -> Vec<&ClassInfo> {
-        self.classes.values()
+        self.classes
+            .values()
             .filter(|c| !c.is_abstract && !c.is_static && self.implements_interface(c, interface))
             .collect()
     }
@@ -248,7 +244,9 @@ impl TypeGraph {
     fn implements_interface(&self, class: &ClassInfo, iface: &str) -> bool {
         class.interfaces.iter().any(|i| i == iface)
             || class.base_class.as_ref().map_or(false, |base| {
-                self.classes.get(base).map_or(false, |c| self.implements_interface(c, iface))
+                self.classes
+                    .get(base)
+                    .map_or(false, |c| self.implements_interface(c, iface))
             })
     }
 
@@ -284,26 +282,32 @@ mod tests {
     #[test]
     fn test_concrete_subclass() {
         let mut tg = TypeGraph::new();
-        tg.classes.insert("Base".into(), ClassInfo {
-            name: "Base".into(),
-            base_class: None,
-            interfaces: vec![],
-            methods: vec![],
-            fields: vec![],
-            is_abstract: false,
-            is_sealed: false,
-            is_static: false,
-        });
-        tg.classes.insert("Derived".into(), ClassInfo {
-            name: "Derived".into(),
-            base_class: Some("Base".into()),
-            interfaces: vec![],
-            methods: vec![],
-            fields: vec![],
-            is_abstract: false,
-            is_sealed: false,
-            is_static: false,
-        });
+        tg.classes.insert(
+            "Base".into(),
+            ClassInfo {
+                name: "Base".into(),
+                base_class: None,
+                interfaces: vec![],
+                methods: vec![],
+                fields: vec![],
+                is_abstract: false,
+                is_sealed: false,
+                is_static: false,
+            },
+        );
+        tg.classes.insert(
+            "Derived".into(),
+            ClassInfo {
+                name: "Derived".into(),
+                base_class: Some("Base".into()),
+                interfaces: vec![],
+                methods: vec![],
+                fields: vec![],
+                is_abstract: false,
+                is_sealed: false,
+                is_static: false,
+            },
+        );
         let subs = tg.concrete_subclasses("Base");
         assert_eq!(subs.len(), 2); // Base + Derived
     }
@@ -318,13 +322,17 @@ mod tests {
     fn test_resolution_set_best() {
         let low = CallSite {
             caller: "Test".into(),
-            target: CallTarget::Instance { method: "Foo".into() },
+            target: CallTarget::Instance {
+                method: "Foo".into(),
+            },
             confidence: Confidence::CHA,
             resolved: vec![],
         };
         let high = CallSite {
             caller: "Test".into(),
-            target: CallTarget::Instance { method: "Foo".into() },
+            target: CallTarget::Instance {
+                method: "Foo".into(),
+            },
             confidence: Confidence::Direct,
             resolved: vec![],
         };
@@ -336,20 +344,26 @@ mod tests {
     #[test]
     fn test_implementors_of() {
         let mut tg = TypeGraph::new();
-        tg.interfaces.insert("IFoo".into(), InterfaceInfo {
-            name: "IFoo".into(),
-            methods: vec![],
-        });
-        tg.classes.insert("Foo".into(), ClassInfo {
-            name: "Foo".into(),
-            base_class: None,
-            interfaces: vec!["IFoo".into()],
-            methods: vec![],
-            fields: vec![],
-            is_abstract: false,
-            is_sealed: false,
-            is_static: false,
-        });
+        tg.interfaces.insert(
+            "IFoo".into(),
+            InterfaceInfo {
+                name: "IFoo".into(),
+                methods: vec![],
+            },
+        );
+        tg.classes.insert(
+            "Foo".into(),
+            ClassInfo {
+                name: "Foo".into(),
+                base_class: None,
+                interfaces: vec!["IFoo".into()],
+                methods: vec![],
+                fields: vec![],
+                is_abstract: false,
+                is_sealed: false,
+                is_static: false,
+            },
+        );
         let impls = tg.implementors_of("IFoo");
         assert_eq!(impls.len(), 1);
         assert_eq!(impls[0].name, "Foo");

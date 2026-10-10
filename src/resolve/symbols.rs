@@ -5,7 +5,9 @@ use std::collections::HashMap;
 use anyhow::Result;
 use tree_sitter::Node;
 
-use crate::resolve::types::{ClassInfo, FieldDescriptor, InterfaceInfo, MethodDescriptor, TypeGraph};
+use crate::resolve::types::{
+    ClassInfo, FieldDescriptor, InterfaceInfo, MethodDescriptor, TypeGraph,
+};
 
 /// Extract type information from AST and build a TypeGraph
 pub struct SymbolTable {
@@ -45,7 +47,8 @@ impl SymbolTable {
     }
 
     fn register_class(&mut self, node: Node, source: &str, _is_struct: bool) {
-        let name = node.child_by_field_name("name")
+        let name = node
+            .child_by_field_name("name")
             .and_then(|n| n.utf8_text(source.as_bytes()).ok())
             .map(|s| s.to_string());
 
@@ -122,7 +125,9 @@ impl SymbolTable {
         if let Some(existing) = self.type_graph.classes.get_mut(&name) {
             existing.methods.extend(ci.methods);
             existing.fields.extend(ci.fields);
-            if ci.base_class.is_some() { existing.base_class = ci.base_class.clone(); }
+            if ci.base_class.is_some() {
+                existing.base_class = ci.base_class.clone();
+            }
             existing.interfaces.extend(ci.interfaces.clone());
             existing.is_abstract = existing.is_abstract || ci.is_abstract;
             existing.is_sealed = existing.is_sealed || ci.is_sealed;
@@ -169,16 +174,17 @@ impl SymbolTable {
                         _ => {}
                     }
                 }
-                let field_type = child.child_by_field_name("type")
+                let field_type = child
+                    .child_by_field_name("type")
                     .and_then(|t| t.utf8_text(source.as_bytes()).ok())
                     .map(|s| s.to_string())
                     .unwrap_or_default();
-                let decl = child.child_by_field_name("declarator")
-                    .or_else(|| {
-                        // variable_declaration may have declarator list
-                        child.child_by_field_name("declarator_list")
-                            .and_then(|dl| dl.child(0))
-                    });
+                let decl = child.child_by_field_name("declarator").or_else(|| {
+                    // variable_declaration may have declarator list
+                    child
+                        .child_by_field_name("declarator_list")
+                        .and_then(|dl| dl.child(0))
+                });
                 let field_name = decl
                     .and_then(|d| d.utf8_text(source.as_bytes()).ok())
                     .map(|s| s.to_string())
@@ -196,7 +202,8 @@ impl SymbolTable {
     }
 
     fn register_interface(&mut self, node: Node, source: &str) {
-        let name = node.child_by_field_name("name")
+        let name = node
+            .child_by_field_name("name")
             .and_then(|n| n.utf8_text(source.as_bytes()).ok())
             .map(|s| s.to_string());
 
@@ -208,7 +215,10 @@ impl SymbolTable {
         let mut methods = Vec::new();
         self.collect_methods(node, source, &mut methods);
 
-        let ii = InterfaceInfo { name: name.clone(), methods };
+        let ii = InterfaceInfo {
+            name: name.clone(),
+            methods,
+        };
         self.type_graph.interfaces.insert(name, ii);
     }
 
@@ -219,7 +229,9 @@ impl SymbolTable {
             let mut new_base: Option<String> = None;
             let mut new_ifaces: Vec<String> = Vec::new();
             for type_name in &bt {
-                if type_name == &class_name { continue; }
+                if type_name == &class_name {
+                    continue;
+                }
                 if self.type_graph.interfaces.contains_key(type_name) {
                     new_ifaces.push(type_name.clone());
                 } else if self.type_graph.classes.contains_key(type_name) {
@@ -276,11 +288,13 @@ fn has_class_modifier(node: Node, source: &str, modifier: &str) -> bool {
 }
 
 fn extract_method(node: Node, source: &str) -> Option<MethodDescriptor> {
-    let name = node.child_by_field_name("name")
+    let name = node
+        .child_by_field_name("name")
         .and_then(|n| n.utf8_text(source.as_bytes()).ok())
         .map(|s| s.to_string())?;
 
-    let return_type = node.child_by_field_name("returns")
+    let return_type = node
+        .child_by_field_name("returns")
         .or_else(|| node.child_by_field_name("return_type"))
         .and_then(|n| n.utf8_text(source.as_bytes()).ok())
         .unwrap_or("void")
@@ -301,7 +315,8 @@ fn extract_method(node: Node, source: &str) -> Option<MethodDescriptor> {
     }
 
     // Extract parameter types from the parameter list
-    let param_types = node.child_by_field_name("parameters")
+    let param_types = node
+        .child_by_field_name("parameters")
         .map(|params_node| {
             let mut ptypes = Vec::new();
             let mut pcursor = params_node.walk();

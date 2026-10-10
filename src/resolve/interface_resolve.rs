@@ -6,9 +6,7 @@
 //! - Explicit interface impl [90%]
 //! - Default Interface Methods (DIM) [85%]
 
-use crate::resolve::types::{
-    CallSite, CallTarget, Confidence, TypeGraph,
-};
+use crate::resolve::types::{CallSite, CallTarget, Confidence, TypeGraph};
 
 /// Resolve an interface method call
 pub fn resolve_interface(
@@ -18,7 +16,10 @@ pub fn resolve_interface(
 ) -> Vec<CallSite> {
     let (iface, method) = match target {
         CallTarget::Abstract { interface, method } => (interface, method),
-        CallTarget::Virtual { class: Some(c), method } => {
+        CallTarget::Virtual {
+            class: Some(c),
+            method,
+        } => {
             // If the receiver type is an interface (not a class), treat as abstract
             if type_graph.interfaces.contains_key(c) {
                 (c, method)
@@ -67,40 +68,46 @@ mod tests {
 
     fn make_interface_graph() -> TypeGraph {
         let mut tg = TypeGraph::new();
-        tg.interfaces.insert("IFoo".into(), InterfaceInfo {
-            name: "IFoo".into(),
-            methods: vec![MethodDescriptor {
-                class: "IFoo".into(),
-                method: "Bar".into(),
-                signature: "void Bar".into(),
-                is_static: false,
-                is_virtual: false,
+        tg.interfaces.insert(
+            "IFoo".into(),
+            InterfaceInfo {
+                name: "IFoo".into(),
+                methods: vec![MethodDescriptor {
+                    class: "IFoo".into(),
+                    method: "Bar".into(),
+                    signature: "void Bar".into(),
+                    is_static: false,
+                    is_virtual: false,
+                    is_abstract: false,
+                    file: String::new(),
+                    line_start: 0,
+                    line_end: 0,
+                }],
+            },
+        );
+        tg.classes.insert(
+            "FooImpl".into(),
+            ClassInfo {
+                name: "FooImpl".into(),
+                base_class: None,
+                interfaces: vec!["IFoo".into()],
+                methods: vec![MethodDescriptor {
+                    class: "FooImpl".into(),
+                    method: "Bar".into(),
+                    signature: "void Bar".into(),
+                    is_static: false,
+                    is_virtual: false,
+                    is_abstract: false,
+                    file: String::new(),
+                    line_start: 0,
+                    line_end: 0,
+                }],
+                fields: vec![],
                 is_abstract: false,
-file: String::new(),
-line_start: 0,
-line_end: 0
-}],
-        });
-        tg.classes.insert("FooImpl".into(), ClassInfo {
-            name: "FooImpl".into(),
-            base_class: None,
-            interfaces: vec!["IFoo".into()],
-            methods: vec![MethodDescriptor {
-                class: "FooImpl".into(),
-                method: "Bar".into(),
-                signature: "void Bar".into(),
+                is_sealed: false,
                 is_static: false,
-                is_virtual: false,
-                is_abstract: false,
-file: String::new(),
-line_start: 0,
-line_end: 0
-}],
-            fields: vec![],
-            is_abstract: false,
-            is_sealed: false,
-            is_static: false,
-        });
+            },
+        );
         tg
     }
 
@@ -121,26 +128,29 @@ line_end: 0
     #[test]
     fn test_multi_impl_returns_multi_impl_confidence() {
         let mut tg = make_interface_graph();
-        tg.classes.insert("AnotherImpl".into(), ClassInfo {
-            name: "AnotherImpl".into(),
-            base_class: None,
-            interfaces: vec!["IFoo".into()],
-            methods: vec![MethodDescriptor {
-                class: "AnotherImpl".into(),
-                method: "Bar".into(),
-                signature: "void Bar".into(),
-                is_static: false,
-                is_virtual: false,
+        tg.classes.insert(
+            "AnotherImpl".into(),
+            ClassInfo {
+                name: "AnotherImpl".into(),
+                base_class: None,
+                interfaces: vec!["IFoo".into()],
+                methods: vec![MethodDescriptor {
+                    class: "AnotherImpl".into(),
+                    method: "Bar".into(),
+                    signature: "void Bar".into(),
+                    is_static: false,
+                    is_virtual: false,
+                    is_abstract: false,
+                    file: String::new(),
+                    line_start: 0,
+                    line_end: 0,
+                }],
+                fields: vec![],
                 is_abstract: false,
-file: String::new(),
-line_start: 0,
-line_end: 0
-}],
-            fields: vec![],
-            is_abstract: false,
-            is_sealed: false,
-            is_static: false,
-        });
+                is_sealed: false,
+                is_static: false,
+            },
+        );
         let target = CallTarget::Abstract {
             interface: "IFoo".into(),
             method: "Bar".into(),

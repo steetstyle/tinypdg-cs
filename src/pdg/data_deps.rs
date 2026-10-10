@@ -9,9 +9,7 @@ use crate::cfg::builder::{BasicBlock, BlockEdge};
 ///
 /// Şu an için stub: AST'den değişken isimlerini çıkaracak
 /// altyapı hazır değil. Faz 3a'da gerçek implementasyon.
-pub fn compute_data_deps(
-    _cfg: &DiGraph<BasicBlock, BlockEdge>,
-) -> Vec<(NodeIndex, NodeIndex)> {
+pub fn compute_data_deps(_cfg: &DiGraph<BasicBlock, BlockEdge>) -> Vec<(NodeIndex, NodeIndex)> {
     Vec::new()
 }
 

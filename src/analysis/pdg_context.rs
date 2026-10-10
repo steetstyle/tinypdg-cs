@@ -60,7 +60,9 @@ impl PdgContext {
 
     pub fn get_method_file(class: &str, method: &str, tg: &TypeGraph) -> Option<String> {
         let ci = tg.classes.get(class)?;
-        ci.methods.iter().find(|m| m.method == method)
+        ci.methods
+            .iter()
+            .find(|m| m.method == method)
             .map(|m| m.file.clone())
             .filter(|f| !f.is_empty())
     }
@@ -84,7 +86,9 @@ impl PdgContext {
 
         while let Some(n) = stack.pop() {
             for pred in cfg.neighbors_directed(n, petgraph::Direction::Incoming) {
-                if !visited.insert(pred) { continue; }
+                if !visited.insert(pred) {
+                    continue;
+                }
                 let b = &cfg[pred];
                 match &b.kind {
                     BlockKind::Condition => {
@@ -137,7 +141,9 @@ impl PdgContext {
                 if !args_text.is_empty() {
                     for arg in args_text.split(',') {
                         let arg = arg.trim();
-                        if arg.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '.')
+                        if arg
+                            .chars()
+                            .all(|c| c.is_alphanumeric() || c == '_' || c == '.')
                             && !arg.is_empty()
                             && !arg.chars().next().map_or(true, |c| c.is_ascii_digit())
                         {
@@ -152,7 +158,11 @@ impl PdgContext {
             }
         }
 
-        if data_flow.is_empty() { None } else { Some(data_flow) }
+        if data_flow.is_empty() {
+            None
+        } else {
+            Some(data_flow)
+        }
     }
 
     fn extract_block_text(lines: &[&str], block: &BasicBlock) -> String {
@@ -161,14 +171,18 @@ impl PdgContext {
         }
         let start = block.start_line - 1;
         let end = block.end_line.min(lines.len());
-        if start >= end { return String::new(); }
+        if start >= end {
+            return String::new();
+        }
         lines[start..end].join(" ").trim().to_string()
     }
 
     fn find_definition(lines: &[&str], var: &str, up_to_line: usize) -> Option<usize> {
         for (i, line) in lines.iter().enumerate() {
             let line_num = i + 1;
-            if line_num >= up_to_line { break; }
+            if line_num >= up_to_line {
+                break;
+            }
             // Match patterns like: `var x = ...`, `Type x = ...`, `x = ...`
             let trimmed = line.trim();
             if trimmed.starts_with(&format!("var {} ", var))
@@ -180,7 +194,10 @@ impl PdgContext {
                 let eq_pos = trimmed.find('=');
                 if let Some(eq) = eq_pos {
                     let lhs = trimmed[..eq].trim();
-                    if lhs == var || lhs.ends_with(&format!(" {}", var)) || lhs.starts_with(&format!("var {}", var)) {
+                    if lhs == var
+                        || lhs.ends_with(&format!(" {}", var))
+                        || lhs.starts_with(&format!("var {}", var))
+                    {
                         return Some(line_num);
                     }
                 }

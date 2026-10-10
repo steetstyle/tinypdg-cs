@@ -34,17 +34,26 @@ fn main() {
         for file in files {
             let source = match fs::read_to_string(file) {
                 Ok(s) => s,
-                Err(_) => { error_count += 1; continue; }
+                Err(_) => {
+                    error_count += 1;
+                    continue;
+                }
             };
 
             let tree = match parse_source(&source) {
                 Ok(t) => t,
-                Err(_) => { error_count += 1; continue; }
+                Err(_) => {
+                    error_count += 1;
+                    continue;
+                }
             };
 
             let st = match SymbolTable::from_ast(tree.root_node(), &source) {
                 Ok(s) => s,
-                Err(_) => { error_count += 1; continue; }
+                Err(_) => {
+                    error_count += 1;
+                    continue;
+                }
             };
 
             let file_cg = CallGraphBuilder::build(tree.root_node(), &source, &st.type_graph);
@@ -75,7 +84,9 @@ fn main() {
             file_count += 1;
         }
 
-        if combined_type_graph.is_none() { continue; }
+        if combined_type_graph.is_none() {
+            continue;
+        }
         let tg = combined_type_graph.unwrap();
         let ctx = DetectionContext::with_callgraph(&tg, &cg, "");
 
@@ -85,15 +96,27 @@ fn main() {
         detections.extend(detect_behavioral(&ctx));
         detections.extend(detect_dotnet(&ctx));
 
-        println!("Parsed: {}/{} (errors: {})", file_count, files.len(), error_count);
-        println!("Classes: {}, Interfaces: {}, Calls: {}", tg.classes.len(), tg.interfaces.len(), cg.calls.len());
+        println!(
+            "Parsed: {}/{} (errors: {})",
+            file_count,
+            files.len(),
+            error_count
+        );
+        println!(
+            "Classes: {}, Interfaces: {}, Calls: {}",
+            tg.classes.len(),
+            tg.interfaces.len(),
+            cg.calls.len()
+        );
 
         if !detections.is_empty() {
             println!("\nPatterns:");
             let mut by_pattern: HashMap<String, Vec<String>> = HashMap::new();
             for d in &detections {
                 let label = format!("{:?}", d.pattern);
-                by_pattern.entry(label).or_default()
+                by_pattern
+                    .entry(label)
+                    .or_default()
                     .push(format!("  {} (c={:.2})", d.class, d.confidence));
             }
             let mut keys: Vec<_> = by_pattern.keys().collect();
@@ -131,15 +154,24 @@ fn main() {
     for file in &all_cs_files {
         let source = match fs::read_to_string(file) {
             Ok(s) => s,
-            Err(_) => { total_errors += 1; continue; }
+            Err(_) => {
+                total_errors += 1;
+                continue;
+            }
         };
         let tree = match parse_source(&source) {
             Ok(t) => t,
-            Err(_) => { total_errors += 1; continue; }
+            Err(_) => {
+                total_errors += 1;
+                continue;
+            }
         };
         let st = match SymbolTable::from_ast(tree.root_node(), &source) {
             Ok(s) => s,
-            Err(_) => { total_errors += 1; continue; }
+            Err(_) => {
+                total_errors += 1;
+                continue;
+            }
         };
         let file_cg = CallGraphBuilder::build(tree.root_node(), &source, &st.type_graph);
         for call in file_cg.calls {
@@ -165,8 +197,17 @@ fn main() {
     }
 
     let tg = all_tg.unwrap_or_else(|| tiny_pdg_cs::resolve::types::TypeGraph::new());
-    println!("Files: {}/{} (errors: {})", total_files, all_cs_files.len(), total_errors);
-    println!("Classes: {}, Interfaces: {}", tg.classes.len(), tg.interfaces.len());
+    println!(
+        "Files: {}/{} (errors: {})",
+        total_files,
+        all_cs_files.len(),
+        total_errors
+    );
+    println!(
+        "Classes: {}, Interfaces: {}",
+        tg.classes.len(),
+        tg.interfaces.len()
+    );
     println!("Total call sites: {}", all_cg.calls.len());
 
     let ctx = DetectionContext::with_callgraph(&tg, &all_cg, "");
@@ -181,8 +222,10 @@ fn main() {
         let mut by_pattern: HashMap<String, Vec<String>> = HashMap::new();
         for d in &detections {
             let label = format!("{:?}", d.pattern);
-            by_pattern.entry(label).or_default()
-                .push(format!("  {} (c={:.2}) — {}", d.class, d.confidence, d.description));
+            by_pattern.entry(label).or_default().push(format!(
+                "  {} (c={:.2}) — {}",
+                d.class, d.confidence, d.description
+            ));
         }
         let mut keys: Vec<_> = by_pattern.keys().collect();
         keys.sort();

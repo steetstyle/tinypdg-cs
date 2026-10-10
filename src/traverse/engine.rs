@@ -2,10 +2,10 @@ use std::io::{self, BufRead, Write};
 
 use anyhow::Result;
 
-use crate::resolve::types::TypeGraph;
 use crate::analysis::callgraph::CallGraph;
-use crate::traverse::types::*;
+use crate::resolve::types::TypeGraph;
 use crate::traverse::display;
+use crate::traverse::types::*;
 
 pub fn run(state: &mut TraversalState, tg: &TypeGraph, cg: &CallGraph) -> Result<()> {
     let stdin = io::stdin();
@@ -114,9 +114,15 @@ pub enum Action {
 pub fn parse_action(input: &str) -> Action {
     let input = input.trim().to_lowercase();
 
-    if input == "q" || input == "quit" { return Action::Quit; }
-    if input == "h" || input == "history" { return Action::History; }
-    if input == "d" || input == "disc" || input == "discard" { return Action::Discard; }
+    if input == "q" || input == "quit" {
+        return Action::Quit;
+    }
+    if input == "h" || input == "history" {
+        return Action::History;
+    }
+    if input == "d" || input == "disc" || input == "discard" {
+        return Action::Discard;
+    }
 
     if input.starts_with('c') {
         let rest = input[1..].trim();

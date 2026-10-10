@@ -52,15 +52,24 @@ fn main() {
         for file in files {
             let source = match fs::read_to_string(file) {
                 Ok(s) => s,
-                Err(_) => { errors += 1; continue; }
+                Err(_) => {
+                    errors += 1;
+                    continue;
+                }
             };
             let tree = match parse_source(&source) {
                 Ok(t) => t,
-                Err(_) => { errors += 1; continue; }
+                Err(_) => {
+                    errors += 1;
+                    continue;
+                }
             };
             let st = match SymbolTable::from_ast(tree.root_node(), &source) {
                 Ok(s) => s,
-                Err(_) => { errors += 1; continue; }
+                Err(_) => {
+                    errors += 1;
+                    continue;
+                }
             };
             let file_cg = CallGraphBuilder::build(tree.root_node(), &source, &st.type_graph);
 
@@ -68,23 +77,53 @@ fn main() {
             if all_tg.is_none() {
                 all_tg = Some(st.type_graph.clone());
             } else if let Some(ref mut atg) = all_tg {
-                for (name, info) in &st.type_graph.classes { atg.classes.entry(name.clone()).or_insert_with(|| info.clone()); }
-                for (name, info) in &st.type_graph.interfaces { atg.interfaces.entry(name.clone()).or_insert_with(|| info.clone()); }
+                for (name, info) in &st.type_graph.classes {
+                    atg.classes
+                        .entry(name.clone())
+                        .or_insert_with(|| info.clone());
+                }
+                for (name, info) in &st.type_graph.interfaces {
+                    atg.interfaces
+                        .entry(name.clone())
+                        .or_insert_with(|| info.clone());
+                }
             }
             all_cg.calls.extend(file_cg.calls.iter().cloned());
-            for (k, v) in &file_cg.class_callees { all_cg.class_callees.entry(k.clone()).or_default().extend(v.iter().cloned()); }
-            for (k, v) in &file_cg.class_creations { all_cg.class_creations.entry(k.clone()).or_default().extend(v.iter().cloned()); }
+            for (k, v) in &file_cg.class_callees {
+                all_cg
+                    .class_callees
+                    .entry(k.clone())
+                    .or_default()
+                    .extend(v.iter().cloned());
+            }
+            for (k, v) in &file_cg.class_creations {
+                all_cg
+                    .class_creations
+                    .entry(k.clone())
+                    .or_default()
+                    .extend(v.iter().cloned());
+            }
 
             // Merge into per-project (consumes)
             if tg.is_none() {
                 tg = Some(st.type_graph);
             } else if let Some(ref mut ptg) = tg {
-                for (name, info) in st.type_graph.classes { ptg.classes.entry(name).or_insert(info); }
-                for (name, info) in st.type_graph.interfaces { ptg.interfaces.entry(name).or_insert(info); }
+                for (name, info) in st.type_graph.classes {
+                    ptg.classes.entry(name).or_insert(info);
+                }
+                for (name, info) in st.type_graph.interfaces {
+                    ptg.interfaces.entry(name).or_insert(info);
+                }
             }
-            for call in file_cg.calls { cg.calls.push(call); }
-            for (k, v) in file_cg.class_callees { cg.class_callees.entry(k).or_default().extend(v); }
-            for (k, v) in file_cg.class_creations { cg.class_creations.entry(k).or_default().extend(v); }
+            for call in file_cg.calls {
+                cg.calls.push(call);
+            }
+            for (k, v) in file_cg.class_callees {
+                cg.class_callees.entry(k).or_default().extend(v);
+            }
+            for (k, v) in file_cg.class_creations {
+                cg.class_creations.entry(k).or_default().extend(v);
+            }
 
             parsed += 1;
         }
@@ -94,12 +133,18 @@ fn main() {
 
         let tg = match tg {
             Some(t) => t,
-            None => { continue; }
+            None => {
+                continue;
+            }
         };
 
         println!("Parsed: {}/{} (errors: {})", parsed, files.len(), errors);
-        println!("Classes: {}, Interfaces: {}, Call sites: {}",
-            tg.classes.len(), tg.interfaces.len(), cg.calls.len());
+        println!(
+            "Classes: {}, Interfaces: {}, Call sites: {}",
+            tg.classes.len(),
+            tg.interfaces.len(),
+            cg.calls.len()
+        );
 
         // Per-project pattern detection
         let ctx = DetectionContext::with_callgraph(&tg, &cg, "");
@@ -113,8 +158,10 @@ fn main() {
             let mut by_pattern: HashMap<String, Vec<String>> = HashMap::new();
             for d in &detections {
                 let label = format!("{}", d.pattern);
-                by_pattern.entry(label).or_default()
-                    .push(format!("  {} (c={:.2}): {}", d.class, d.confidence, d.description));
+                by_pattern.entry(label).or_default().push(format!(
+                    "  {} (c={:.2}): {}",
+                    d.class, d.confidence, d.description
+                ));
             }
             let mut keys: Vec<_> = by_pattern.keys().collect();
             keys.sort();
@@ -129,10 +176,18 @@ fn main() {
         // Per-project call graph: show internal calls by class
         if !cg.calls.is_empty() {
             println!("\n  --- Internal Call Graph ---");
-            let mut by_caller: HashMap<String, Vec<(String, String, bool, Option<String>)>> = HashMap::new();
+            let mut by_caller: HashMap<String, Vec<(String, String, bool, Option<String>)>> =
+                HashMap::new();
             for call in &cg.calls {
-                by_caller.entry(call.caller_class.clone()).or_default()
-                    .push((call.callee.clone(), call.target_expr.clone(), call.is_self_call, call.created_type.clone()));
+                by_caller
+                    .entry(call.caller_class.clone())
+                    .or_default()
+                    .push((
+                        call.callee.clone(),
+                        call.target_expr.clone(),
+                        call.is_self_call,
+                        call.created_type.clone(),
+                    ));
             }
             let mut caller_classes: Vec<_> = by_caller.keys().collect();
             caller_classes.sort();
@@ -140,8 +195,18 @@ fn main() {
                 let calls = &by_caller[caller.as_str()];
                 println!("    {} ->", caller);
                 for (callee, target, is_self, created) in calls {
-                    let via = if *is_self { "self" } else if target.is_empty() { "direct" } else { target.as_str() };
-                    let suffix = if let Some(ref ct) = created { format!(" [new {}]", ct) } else { String::new() };
+                    let via = if *is_self {
+                        "self"
+                    } else if target.is_empty() {
+                        "direct"
+                    } else {
+                        target.as_str()
+                    };
+                    let suffix = if let Some(ref ct) = created {
+                        format!(" [new {}]", ct)
+                    } else {
+                        String::new()
+                    };
                     println!("      {}.{}{}", via, callee, suffix);
                 }
             }
@@ -167,9 +232,18 @@ fn main() {
     println!("\n{}", "=".repeat(80));
     println!("FULL SOLUTION SUMMARY");
     println!("{}", "=".repeat(80));
-    println!("Files: {}/{} (errors: {})", total_parsed, all_cs_files.len(), total_errors);
-    println!("Classes: {}, Interfaces: {}, Call sites: {}",
-        tg.classes.len(), tg.interfaces.len(), all_cg.calls.len());
+    println!(
+        "Files: {}/{} (errors: {})",
+        total_parsed,
+        all_cs_files.len(),
+        total_errors
+    );
+    println!(
+        "Classes: {}, Interfaces: {}, Call sites: {}",
+        tg.classes.len(),
+        tg.interfaces.len(),
+        all_cg.calls.len()
+    );
 
     println!("\nTop called methods (cross-project):");
     let mut callee_count: HashMap<String, usize> = HashMap::new();

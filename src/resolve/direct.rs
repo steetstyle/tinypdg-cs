@@ -5,8 +5,8 @@
 
 use tree_sitter::Node;
 
-use crate::resolve::types::{CallSite, CallTarget, Confidence, MethodDescriptor};
 use crate::resolve::symbols::SymbolTable;
+use crate::resolve::types::{CallSite, CallTarget, Confidence, MethodDescriptor};
 
 /// Check if a call expression is a direct (non-virtual) invocation
 pub fn resolve_direct(
@@ -122,9 +122,11 @@ mod tests {
             if node.kind() == "invocation_expression" {
                 let target = classify_call(node, src);
                 assert!(target.is_some());
-                assert!(matches!(target.unwrap(), CallTarget::Static { class, method }
-                    if class == "Foo" && method == "Bar"
-                ));
+                assert!(
+                    matches!(target.unwrap(), CallTarget::Static { class, method }
+                        if class == "Foo" && method == "Bar"
+                    )
+                );
                 return;
             }
             if !cursor.goto_first_child() {

@@ -20,7 +20,9 @@ fn detect_composite(ctx: &DetectionContext, results: &mut Vec<PatternMatch>) {
         detect_composite_for_type(ctx, results, iface_name, true);
     }
     for (class_name, class) in &ctx.type_graph.classes {
-        if !class.is_abstract { continue; }
+        if !class.is_abstract {
+            continue;
+        }
         detect_composite_for_type(ctx, results, class_name, false);
     }
 }
@@ -29,31 +31,43 @@ fn return_type_of(m: &crate::resolve::types::MethodDescriptor) -> &str {
     m.signature.split_whitespace().next().unwrap_or("void")
 }
 
-fn detect_composite_for_type(ctx: &DetectionContext, results: &mut Vec<PatternMatch>,
-    type_name: &str, is_interface: bool)
-{
+fn detect_composite_for_type(
+    ctx: &DetectionContext,
+    results: &mut Vec<PatternMatch>,
+    type_name: &str,
+    is_interface: bool,
+) {
     let methods = if is_interface {
         if let Some(iface) = ctx.type_graph.interfaces.get(type_name) {
             &iface.methods
-        } else { return }
+        } else {
+            return;
+        }
     } else {
         if let Some(class) = ctx.type_graph.classes.get(type_name) {
             &class.methods
-        } else { return }
+        } else {
+            return;
+        }
     };
 
-    let non_accessor: Vec<_> = methods.iter()
+    let non_accessor: Vec<_> = methods
+        .iter()
         .filter(|m| !m.method.starts_with("get_") && !m.method.starts_with("set_"))
         .collect();
 
     let implementors = ctx.type_graph.concrete_subclasses(type_name);
-    if implementors.len() < 2 { return; }
+    if implementors.len() < 2 {
+        return;
+    }
 
     // Exclude intermediate abstract classes (Decorator signal)
     if !is_interface {
         if let Some(class_info) = ctx.type_graph.classes.get(type_name) {
             // Skip if this abstract class has an abstract base class
-            if class_info.base_class.as_ref()
+            if class_info
+                .base_class
+                .as_ref()
                 .and_then(|base| ctx.type_graph.classes.get(base))
                 .map(|base| base.is_abstract)
                 .unwrap_or(false)
@@ -62,13 +76,19 @@ fn detect_composite_for_type(ctx: &DetectionContext, results: &mut Vec<PatternMa
             }
         }
         // Skip if this class has an abstract subclass (Composite should have concrete subs only)
-        let has_abstract_sub = ctx.type_graph.classes.values().any(|c| {
-            c.is_abstract && c.base_class.as_deref() == Some(type_name)
-        });
-        if has_abstract_sub { return; }
+        let has_abstract_sub = ctx
+            .type_graph
+            .classes
+            .values()
+            .any(|c| c.is_abstract && c.base_class.as_deref() == Some(type_name));
+        if has_abstract_sub {
+            return;
+        }
     }
 
-    if non_accessor.len() < 2 { return; }
+    if non_accessor.len() < 2 {
+        return;
+    }
     let returns_self = non_accessor.iter().any(|m| return_type_of(m) == type_name);
 
     let confidence = if returns_self {
@@ -77,7 +97,11 @@ fn detect_composite_for_type(ctx: &DetectionContext, results: &mut Vec<PatternMa
         if non_accessor.len() >= 3 {
             let has_void = non_accessor.iter().any(|m| return_type_of(m) == "void");
             let has_non_void = non_accessor.iter().any(|m| return_type_of(m) != "void");
-            if has_void && has_non_void { 0.65 } else { return; }
+            if has_void && has_non_void {
+                0.65
+            } else {
+                return;
+            }
         } else {
             return;
         }
@@ -88,8 +112,13 @@ fn detect_composite_for_type(ctx: &DetectionContext, results: &mut Vec<PatternMa
         class: type_name.to_string(),
         description: format!(
             "{} '{}' has mgmt+ops with {} implementations — Composite",
-            if is_interface { "Interface" } else { "Abstract class" },
-            type_name, implementors.len()
+            if is_interface {
+                "Interface"
+            } else {
+                "Abstract class"
+            },
+            type_name,
+            implementors.len()
         ),
         confidence,
         participants: vec![type_name.to_string()],
@@ -106,7 +135,9 @@ fn detect_decorator(ctx: &DetectionContext, results: &mut Vec<PatternMatch>) {
     // which in turn has 2+ concrete subclasses (ConcreteDecorators).
     // The base class also has a direct concrete subclass (ConcreteComponent).
     for class in ctx.type_graph.classes.values() {
-        if !class.is_abstract { continue; }
+        if !class.is_abstract {
+            continue;
+        }
 
         // Check if this abstract class has a base that is also abstract
         let base_name = match &class.base_class {
@@ -119,20 +150,29 @@ fn detect_decorator(ctx: &DetectionContext, results: &mut Vec<PatternMatch>) {
         };
 
         // The intermediate class must have 1+ methods beyond the base
-        if class.methods.len() <= base_class.methods.len() { continue; }
+        if class.methods.len() <= base_class.methods.len() {
+            continue;
+        }
 
         // Must have 2+ concrete subclasses
-        let concrete_subs: Vec<_> = ctx.type_graph.classes.values()
+        let concrete_subs: Vec<_> = ctx
+            .type_graph
+            .classes
+            .values()
             .filter(|c| !c.is_abstract && c.base_class.as_deref() == Some(&class.name))
             .collect();
-        if concrete_subs.len() < 2 { continue; }
+        if concrete_subs.len() < 2 {
+            continue;
+        }
 
         results.push(PatternMatch {
             pattern: PatternKind::Decorator,
             class: class.name.clone(),
             description: format!(
                 "'{}' wraps '{}' with {} decorators — Decorator",
-                class.name, base_name, concrete_subs.len()
+                class.name,
+                base_name,
+                concrete_subs.len()
             ),
             confidence: 0.7,
             participants: vec![class.name.clone(), base_name.clone()],
@@ -142,31 +182,45 @@ fn detect_decorator(ctx: &DetectionContext, results: &mut Vec<PatternMatch>) {
 }
 
 fn detect_adapter_decorator_proxy(ctx: &DetectionContext, results: &mut Vec<PatternMatch>) {
-    let interface_names: HashSet<&str> = ctx.type_graph.interfaces.keys()
-        .map(|s| s.as_str()).collect();
+    let interface_names: HashSet<&str> = ctx
+        .type_graph
+        .interfaces
+        .keys()
+        .map(|s| s.as_str())
+        .collect();
 
     for class in ctx.type_graph.classes.values() {
-        if class.interfaces.is_empty() { continue; }
+        if class.interfaces.is_empty() {
+            continue;
+        }
 
         for iface in &class.interfaces {
-            if !interface_names.contains(iface.as_str()) { continue; }
+            if !interface_names.contains(iface.as_str()) {
+                continue;
+            }
 
             let target_iface = match ctx.type_graph.interfaces.get(iface.as_str()) {
                 Some(i) => i,
                 None => continue,
             };
 
-            if target_iface.methods.is_empty() { continue; }
+            if target_iface.methods.is_empty() {
+                continue;
+            }
 
-            let impl_methods: HashSet<&str> = class.methods.iter()
-                .map(|m| m.method.as_str()).collect();
+            let impl_methods: HashSet<&str> =
+                class.methods.iter().map(|m| m.method.as_str()).collect();
 
-            let missing: Vec<&str> = target_iface.methods.iter()
+            let missing: Vec<&str> = target_iface
+                .methods
+                .iter()
                 .filter(|im| !impl_methods.contains(im.method.as_str()))
                 .map(|im| im.method.as_str())
                 .collect();
 
-            if !missing.is_empty() { continue; }
+            if !missing.is_empty() {
+                continue;
+            }
 
             // An adapter wraps a different type: check if any constructor
             // takes a parameter whose type is NOT the target interface
@@ -191,9 +245,14 @@ fn detect_adapter_decorator_proxy(ctx: &DetectionContext, results: &mut Vec<Patt
             });
 
             // Also allow extra non-interface methods (wrapper behavior)
-            let iface_method_set: HashSet<&str> = target_iface.methods.iter()
-                .map(|m| m.method.as_str()).collect();
-            let extra_methods: Vec<&str> = class.methods.iter()
+            let iface_method_set: HashSet<&str> = target_iface
+                .methods
+                .iter()
+                .map(|m| m.method.as_str())
+                .collect();
+            let extra_methods: Vec<&str> = class
+                .methods
+                .iter()
                 .filter(|m| !m.method.starts_with("get_") && !m.method.starts_with("set_"))
                 .filter(|m| m.method != class.name)
                 .map(|m| m.method.as_str())
@@ -201,11 +260,19 @@ fn detect_adapter_decorator_proxy(ctx: &DetectionContext, results: &mut Vec<Patt
                 .collect();
             let has_extra = !extra_methods.is_empty();
 
-            if !wraps_other_type && !has_extra { continue; }
+            if !wraps_other_type && !has_extra {
+                continue;
+            }
 
             let returns_interface = target_iface.methods.iter().any(|m| {
                 let rt = return_type_of(m);
-                ctx.type_graph.interfaces.contains_key(rt) || ctx.type_graph.classes.get(rt).map(|c| c.is_abstract).unwrap_or(false)
+                ctx.type_graph.interfaces.contains_key(rt)
+                    || ctx
+                        .type_graph
+                        .classes
+                        .get(rt)
+                        .map(|c| c.is_abstract)
+                        .unwrap_or(false)
             });
 
             if returns_interface {
@@ -215,7 +282,11 @@ fn detect_adapter_decorator_proxy(ctx: &DetectionContext, results: &mut Vec<Patt
                     description: format!("'{}' wraps '{}' — decorator pattern", class.name, iface),
                     confidence: 0.5,
                     participants: vec![class.name.clone(), iface.clone()],
-                    evidence: target_iface.methods.iter().map(|m| m.method.clone()).collect(),
+                    evidence: target_iface
+                        .methods
+                        .iter()
+                        .map(|m| m.method.clone())
+                        .collect(),
                 });
             } else {
                 results.push(PatternMatch {
@@ -224,7 +295,11 @@ fn detect_adapter_decorator_proxy(ctx: &DetectionContext, results: &mut Vec<Patt
                     description: format!("'{}' implements '{}' — adapter", class.name, iface),
                     confidence: 0.5,
                     participants: vec![class.name.clone(), iface.clone()],
-                    evidence: target_iface.methods.iter().map(|m| m.method.clone()).collect(),
+                    evidence: target_iface
+                        .methods
+                        .iter()
+                        .map(|m| m.method.clone())
+                        .collect(),
                 });
             }
         }
@@ -233,10 +308,14 @@ fn detect_adapter_decorator_proxy(ctx: &DetectionContext, results: &mut Vec<Patt
 
 fn detect_bridge(ctx: &DetectionContext, results: &mut Vec<PatternMatch>) {
     for class in ctx.type_graph.classes.values() {
-        if !class.is_abstract || class.interfaces.is_empty() { continue; }
+        if !class.is_abstract || class.interfaces.is_empty() {
+            continue;
+        }
 
         let iface = &class.interfaces[0];
-        if !ctx.type_graph.interfaces.contains_key(iface.as_str()) { continue; }
+        if !ctx.type_graph.interfaces.contains_key(iface.as_str()) {
+            continue;
+        }
 
         let implementors = ctx.type_graph.concrete_subclasses(&class.name);
         if implementors.len() >= 2 {
@@ -245,7 +324,9 @@ fn detect_bridge(ctx: &DetectionContext, results: &mut Vec<PatternMatch>) {
                 class: class.name.clone(),
                 description: format!(
                     "Abstract '{}' implements '{}' with {} subclasses — Bridge",
-                    class.name, iface, implementors.len()
+                    class.name,
+                    iface,
+                    implementors.len()
                 ),
                 confidence: 0.6,
                 participants: vec![class.name.clone(), iface.clone()],
@@ -260,10 +341,11 @@ fn detect_flyweight(ctx: &DetectionContext, results: &mut Vec<PatternMatch>) {
         // Flyweight: has a static cache field (Dictionary, ConcurrentDictionary, etc.)
         // and static factory methods that return the class itself
         let has_cache_field = class.fields.iter().any(|f| {
-            f.is_static && (f.field_type.contains("Dictionary")
-                || f.field_type.contains("ConcurrentDictionary")
-                || f.field_type.contains("Cache")
-                || f.field_type.contains("Pool"))
+            f.is_static
+                && (f.field_type.contains("Dictionary")
+                    || f.field_type.contains("ConcurrentDictionary")
+                    || f.field_type.contains("Cache")
+                    || f.field_type.contains("Pool"))
         });
 
         let has_static_factory = class.methods.iter().any(|m| {
@@ -271,7 +353,9 @@ fn detect_flyweight(ctx: &DetectionContext, results: &mut Vec<PatternMatch>) {
             m.is_static && rt == class.name
         });
 
-        let returns_self = class.methods.iter()
+        let returns_self = class
+            .methods
+            .iter()
             .filter(|m| {
                 let rt = m.signature.split_whitespace().next().unwrap_or("");
                 rt == class.name && !m.is_static
@@ -295,12 +379,16 @@ fn detect_flyweight(ctx: &DetectionContext, results: &mut Vec<PatternMatch>) {
         if has_static_factory {
             evidence.push("static factory".into());
         }
-        evidence.extend(class.methods.iter()
-            .filter(|m| {
-                let rt = m.signature.split_whitespace().next().unwrap_or("");
-                rt == class.name
-            })
-            .map(|m| format!("{} -> {}", m.method, class.name)));
+        evidence.extend(
+            class
+                .methods
+                .iter()
+                .filter(|m| {
+                    let rt = m.signature.split_whitespace().next().unwrap_or("");
+                    rt == class.name
+                })
+                .map(|m| format!("{} -> {}", m.method, class.name)),
+        );
 
         results.push(PatternMatch {
             pattern: PatternKind::Flyweight,
@@ -318,13 +406,19 @@ fn detect_flyweight(ctx: &DetectionContext, results: &mut Vec<PatternMatch>) {
 
 fn detect_facade(ctx: &DetectionContext, results: &mut Vec<PatternMatch>) {
     for class in ctx.type_graph.classes.values() {
-        if class.is_abstract || class.is_static || !class.interfaces.is_empty() { continue; }
+        if class.is_abstract || class.is_static || !class.interfaces.is_empty() {
+            continue;
+        }
 
         if class.methods.len() >= 4 {
             results.push(PatternMatch {
                 pattern: PatternKind::Facade,
                 class: class.name.clone(),
-                description: format!("'{}' has {} methods and no interfaces — Facade", class.name, class.methods.len()),
+                description: format!(
+                    "'{}' has {} methods and no interfaces — Facade",
+                    class.name,
+                    class.methods.len()
+                ),
                 confidence: 0.3,
                 participants: vec![class.name.clone()],
                 evidence: class.methods.iter().map(|m| m.method.clone()).collect(),
@@ -341,42 +435,97 @@ mod tests {
     #[test]
     fn test_composite_with_add_and_implementors() {
         let methods = vec![
-            MethodDescriptor { class: "IComponent".into(), method: "Add".into(),
-                signature: "IComponent Add".into(), is_static: false,
-                is_virtual: false, is_abstract: false, file: String::new(), line_start: 0, line_end: 0 },
-            MethodDescriptor { class: "IComponent".into(), method: "Render".into(),
-                signature: "void Render".into(), is_static: false,
-                is_virtual: false, is_abstract: false, file: String::new(), line_start: 0, line_end: 0 },
+            MethodDescriptor {
+                class: "IComponent".into(),
+                method: "Add".into(),
+                signature: "IComponent Add".into(),
+                is_static: false,
+                is_virtual: false,
+                is_abstract: false,
+                file: String::new(),
+                line_start: 0,
+                line_end: 0,
+            },
+            MethodDescriptor {
+                class: "IComponent".into(),
+                method: "Render".into(),
+                signature: "void Render".into(),
+                is_static: false,
+                is_virtual: false,
+                is_abstract: false,
+                file: String::new(),
+                line_start: 0,
+                line_end: 0,
+            },
         ];
 
         let mut tg = TypeGraph::new();
-        tg.interfaces.insert("IComponent".into(), InterfaceInfo {
-            name: "IComponent".into(),
-            methods,
-        });
-        tg.classes.insert("Leaf".into(), ClassInfo {
-            name: "Leaf".into(), base_class: None,
-            interfaces: vec!["IComponent".into()],
-            methods: vec![MethodDescriptor { class: "Leaf".into(), method: "Render".into(),
-                signature: "void Render".into(), is_static: false,
-                is_virtual: false, is_abstract: false, file: String::new(), line_start: 0, line_end: 0 }],
-            fields: vec![],
-            is_abstract: false, is_sealed: false, is_static: false,
-        });
-        tg.classes.insert("Composite".into(), ClassInfo {
-            name: "Composite".into(), base_class: None,
-            interfaces: vec!["IComponent".into()],
-            methods: vec![
-                MethodDescriptor { class: "Composite".into(), method: "Add".into(),
-                    signature: "void Add".into(), is_static: false,
-                    is_virtual: false, is_abstract: false, file: String::new(), line_start: 0, line_end: 0 },
-                MethodDescriptor { class: "Composite".into(), method: "Render".into(),
-                    signature: "void Render".into(), is_static: false,
-                    is_virtual: false, is_abstract: false, file: String::new(), line_start: 0, line_end: 0 },
-            ],
-            fields: vec![],
-            is_abstract: false, is_sealed: false, is_static: false,
-        });
+        tg.interfaces.insert(
+            "IComponent".into(),
+            InterfaceInfo {
+                name: "IComponent".into(),
+                methods,
+            },
+        );
+        tg.classes.insert(
+            "Leaf".into(),
+            ClassInfo {
+                name: "Leaf".into(),
+                base_class: None,
+                interfaces: vec!["IComponent".into()],
+                methods: vec![MethodDescriptor {
+                    class: "Leaf".into(),
+                    method: "Render".into(),
+                    signature: "void Render".into(),
+                    is_static: false,
+                    is_virtual: false,
+                    is_abstract: false,
+                    file: String::new(),
+                    line_start: 0,
+                    line_end: 0,
+                }],
+                fields: vec![],
+                is_abstract: false,
+                is_sealed: false,
+                is_static: false,
+            },
+        );
+        tg.classes.insert(
+            "Composite".into(),
+            ClassInfo {
+                name: "Composite".into(),
+                base_class: None,
+                interfaces: vec!["IComponent".into()],
+                methods: vec![
+                    MethodDescriptor {
+                        class: "Composite".into(),
+                        method: "Add".into(),
+                        signature: "void Add".into(),
+                        is_static: false,
+                        is_virtual: false,
+                        is_abstract: false,
+                        file: String::new(),
+                        line_start: 0,
+                        line_end: 0,
+                    },
+                    MethodDescriptor {
+                        class: "Composite".into(),
+                        method: "Render".into(),
+                        signature: "void Render".into(),
+                        is_static: false,
+                        is_virtual: false,
+                        is_abstract: false,
+                        file: String::new(),
+                        line_start: 0,
+                        line_end: 0,
+                    },
+                ],
+                fields: vec![],
+                is_abstract: false,
+                is_sealed: false,
+                is_static: false,
+            },
+        );
         let ctx = DetectionContext::new(&tg, "");
         let r = detect_structural(&ctx);
         assert!(r.iter().any(|m| m.pattern == PatternKind::Composite));
@@ -385,18 +534,31 @@ mod tests {
     #[test]
     fn test_facade_many_methods_no_interfaces() {
         let mut tg = TypeGraph::new();
-        tg.classes.insert("OrderService".into(), ClassInfo {
-            name: "OrderService".into(), base_class: None, interfaces: vec![],
-            methods: (0..5).map(|i| MethodDescriptor {
-                class: "OrderService".into(),
-                method: format!("Method{}", i),
-                signature: format!("void Method{}", i),
-                is_static: false, is_virtual: false, is_abstract: false,
-                file: String::new(), line_start: 0, line_end: 0,
-            }).collect(),
-            fields: vec![],
-            is_abstract: false, is_sealed: false, is_static: false,
-        });
+        tg.classes.insert(
+            "OrderService".into(),
+            ClassInfo {
+                name: "OrderService".into(),
+                base_class: None,
+                interfaces: vec![],
+                methods: (0..5)
+                    .map(|i| MethodDescriptor {
+                        class: "OrderService".into(),
+                        method: format!("Method{}", i),
+                        signature: format!("void Method{}", i),
+                        is_static: false,
+                        is_virtual: false,
+                        is_abstract: false,
+                        file: String::new(),
+                        line_start: 0,
+                        line_end: 0,
+                    })
+                    .collect(),
+                fields: vec![],
+                is_abstract: false,
+                is_sealed: false,
+                is_static: false,
+            },
+        );
         let ctx = DetectionContext::new(&tg, "");
         let r = detect_structural(&ctx);
         assert!(r.iter().any(|m| m.pattern == PatternKind::Facade));
@@ -405,36 +567,82 @@ mod tests {
     #[test]
     fn test_bridge_abstract_with_subclasses() {
         let mut tg = TypeGraph::new();
-        tg.interfaces.insert("IDraw".into(), InterfaceInfo {
-            name: "IDraw".into(), methods: vec![],
-        });
-        tg.classes.insert("Shape".into(), ClassInfo {
-            name: "Shape".into(), base_class: None,
-            interfaces: vec!["IDraw".into()],
-            methods: vec![MethodDescriptor { class: "Shape".into(), method: "Draw".into(),
-                signature: "void Draw".into(), is_static: false,
-                is_virtual: true, is_abstract: false, file: String::new(), line_start: 0, line_end: 0 }],
-            fields: vec![],
-            is_abstract: true, is_sealed: false, is_static: false,
-        });
-        tg.classes.insert("Circle".into(), ClassInfo {
-            name: "Circle".into(), base_class: Some("Shape".into()),
-            interfaces: vec![],
-            methods: vec![MethodDescriptor { class: "Circle".into(), method: "Draw".into(),
-                signature: "void Draw".into(), is_static: false,
-                is_virtual: false, is_abstract: false, file: String::new(), line_start: 0, line_end: 0 }],
-            fields: vec![],
-            is_abstract: false, is_sealed: false, is_static: false,
-        });
-        tg.classes.insert("Square".into(), ClassInfo {
-            name: "Square".into(), base_class: Some("Shape".into()),
-            interfaces: vec![],
-            methods: vec![MethodDescriptor { class: "Square".into(), method: "Draw".into(),
-                signature: "void Draw".into(), is_static: false,
-                is_virtual: false, is_abstract: false, file: String::new(), line_start: 0, line_end: 0 }],
-            fields: vec![],
-            is_abstract: false, is_sealed: false, is_static: false,
-        });
+        tg.interfaces.insert(
+            "IDraw".into(),
+            InterfaceInfo {
+                name: "IDraw".into(),
+                methods: vec![],
+            },
+        );
+        tg.classes.insert(
+            "Shape".into(),
+            ClassInfo {
+                name: "Shape".into(),
+                base_class: None,
+                interfaces: vec!["IDraw".into()],
+                methods: vec![MethodDescriptor {
+                    class: "Shape".into(),
+                    method: "Draw".into(),
+                    signature: "void Draw".into(),
+                    is_static: false,
+                    is_virtual: true,
+                    is_abstract: false,
+                    file: String::new(),
+                    line_start: 0,
+                    line_end: 0,
+                }],
+                fields: vec![],
+                is_abstract: true,
+                is_sealed: false,
+                is_static: false,
+            },
+        );
+        tg.classes.insert(
+            "Circle".into(),
+            ClassInfo {
+                name: "Circle".into(),
+                base_class: Some("Shape".into()),
+                interfaces: vec![],
+                methods: vec![MethodDescriptor {
+                    class: "Circle".into(),
+                    method: "Draw".into(),
+                    signature: "void Draw".into(),
+                    is_static: false,
+                    is_virtual: false,
+                    is_abstract: false,
+                    file: String::new(),
+                    line_start: 0,
+                    line_end: 0,
+                }],
+                fields: vec![],
+                is_abstract: false,
+                is_sealed: false,
+                is_static: false,
+            },
+        );
+        tg.classes.insert(
+            "Square".into(),
+            ClassInfo {
+                name: "Square".into(),
+                base_class: Some("Shape".into()),
+                interfaces: vec![],
+                methods: vec![MethodDescriptor {
+                    class: "Square".into(),
+                    method: "Draw".into(),
+                    signature: "void Draw".into(),
+                    is_static: false,
+                    is_virtual: false,
+                    is_abstract: false,
+                    file: String::new(),
+                    line_start: 0,
+                    line_end: 0,
+                }],
+                fields: vec![],
+                is_abstract: false,
+                is_sealed: false,
+                is_static: false,
+            },
+        );
         let ctx = DetectionContext::new(&tg, "");
         let r = detect_structural(&ctx);
         assert!(r.iter().any(|m| m.pattern == PatternKind::Bridge));

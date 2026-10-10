@@ -1,7 +1,9 @@
 use tree_sitter::Parser;
 fn main() {
     let mut parser = Parser::new();
-    parser.set_language(&tree_sitter_c_sharp::LANGUAGE.into()).unwrap();
+    parser
+        .set_language(&tree_sitter_c_sharp::LANGUAGE.into())
+        .unwrap();
     let sources = vec![
         "class Foo { void Bar() { this.Baz(); } void Baz() { } }",
         "class Foo { void Bar() { var x = new Widget(); x.DoSomething(); } }",
@@ -17,7 +19,9 @@ fn main() {
     }
 }
 fn find_method_calls(node: tree_sitter::Node, source: &str, depth: usize) {
-    if depth > 8 { return; }
+    if depth > 8 {
+        return;
+    }
     let kind = node.kind();
     if kind == "invocation_expression" || kind == "object_creation_expression" {
         let text = node.utf8_text(source.as_bytes()).unwrap_or("");
@@ -30,11 +34,24 @@ fn find_method_calls(node: tree_sitter::Node, source: &str, depth: usize) {
                 if let Some(fname) = child.field_name_for_child(i as u32) {
                     let gc = child.child(i).unwrap();
                     let gct = gc.utf8_text(source.as_bytes()).unwrap_or("");
-                    println!("  {:indent$}  field {}: {} = {}", "", fname, gc.kind(), gct, indent = depth * 2 + 2);
+                    println!(
+                        "  {:indent$}  field {}: {} = {}",
+                        "",
+                        fname,
+                        gc.kind(),
+                        gct,
+                        indent = depth * 2 + 2
+                    );
                 }
             }
             if !ckind.starts_with("field_") {
-                println!("  {:indent$}  {}: {}", "", ckind, ctext, indent = depth * 2 + 2);
+                println!(
+                    "  {:indent$}  {}: {}",
+                    "",
+                    ckind,
+                    ctext,
+                    indent = depth * 2 + 2
+                );
             }
         }
     }

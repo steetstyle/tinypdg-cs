@@ -10,10 +10,7 @@ use crate::resolve::types::{
 };
 
 /// Scan AST for reflection patterns
-pub fn scan_reflection(
-    _source: &str,
-    _type_graph: &TypeGraph,
-) -> Vec<ReflectionPattern> {
+pub fn scan_reflection(_source: &str, _type_graph: &TypeGraph) -> Vec<ReflectionPattern> {
     // Stub: real implementation traverses AST for typeof+GetMethod patterns
     Vec::new()
 }
@@ -85,13 +82,16 @@ pub fn classify_reflection(node: tree_sitter::Node, source: &str) -> Option<Call
 
     // Detect `Activator.CreateInstance(typeof(Foo))`
     if func.kind() == "member_access_expression" {
-        let expr = func.child_by_field_name("expression")
+        let expr = func
+            .child_by_field_name("expression")
             .and_then(|n| n.utf8_text(source.as_bytes()).ok());
-        let name = func.child_by_field_name("name")
+        let name = func
+            .child_by_field_name("name")
             .and_then(|n| n.utf8_text(source.as_bytes()).ok());
         if let (Some("Activator"), Some("CreateInstance")) = (expr, name) {
             // Extract type from first argument (typeof(Foo) or "TypeName")
-            if let Some(arg) = node.child_by_field_name("arguments")
+            if let Some(arg) = node
+                .child_by_field_name("arguments")
                 .and_then(|a| a.child(0))
             {
                 if arg.kind() == "typeof_expression" {
@@ -113,7 +113,8 @@ fn check_typeof_chain(node: tree_sitter::Node, source: &str) -> Option<CallTarge
     if node.kind() != "member_access_expression" {
         return None;
     }
-    let name = node.child_by_field_name("name")
+    let name = node
+        .child_by_field_name("name")
         .and_then(|n| n.utf8_text(source.as_bytes()).ok())?;
 
     if name != "GetMethod" && name != "GetProperty" {
@@ -174,7 +175,9 @@ mod tests {
     fn test_classify_typeof_getmethod() {
         let src = "class C { void M() { typeof(Foo).GetMethod(\"Bar\"); } }";
         let mut parser = tree_sitter::Parser::new();
-        parser.set_language(&tree_sitter_c_sharp::LANGUAGE.into()).unwrap();
+        parser
+            .set_language(&tree_sitter_c_sharp::LANGUAGE.into())
+            .unwrap();
         let tree = parser.parse(src, None).unwrap();
         #[allow(deprecated)]
         let root = tree.root_node();
@@ -192,8 +195,13 @@ mod tests {
             }
             if !cursor.goto_first_child() {
                 loop {
-                    if cursor.goto_next_sibling() { break; }
-                    if !cursor.goto_parent() { finished = true; break; }
+                    if cursor.goto_next_sibling() {
+                        break;
+                    }
+                    if !cursor.goto_parent() {
+                        finished = true;
+                        break;
+                    }
                 }
             }
         }

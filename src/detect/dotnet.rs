@@ -14,14 +14,30 @@ pub fn detect_dotnet(ctx: &DetectionContext) -> Vec<PatternMatch> {
 fn detect_di_container(ctx: &DetectionContext, results: &mut Vec<PatternMatch>) {
     // DI Container: classes that register services via AddScoped/AddSingleton/AddTransient
     // Typically found in Startup-like classes or static extension methods
-    let di_methods = ["AddScoped", "AddSingleton", "AddTransient",
-        "AddDbContext", "AddDbContextPool", "AddAuthentication",
-        "AddAuthorization", "AddControllers", "AddEndpointsApiExplorer",
-        "AddSwaggerGen", "AddCors", "AddMvc", "AddSignalR", "AddGrpc"];
+    let di_methods = [
+        "AddScoped",
+        "AddSingleton",
+        "AddTransient",
+        "AddDbContext",
+        "AddDbContextPool",
+        "AddAuthentication",
+        "AddAuthorization",
+        "AddControllers",
+        "AddEndpointsApiExplorer",
+        "AddSwaggerGen",
+        "AddCors",
+        "AddMvc",
+        "AddSignalR",
+        "AddGrpc",
+    ];
 
     for class in ctx.type_graph.classes.values() {
-        if !class.is_static && class.name != "Program" && !class.name.ends_with("Startup")
-            && !class.name.ends_with("Extension") && !class.name.ends_with("Extensions") {
+        if !class.is_static
+            && class.name != "Program"
+            && !class.name.ends_with("Startup")
+            && !class.name.ends_with("Extension")
+            && !class.name.ends_with("Extensions")
+        {
             continue;
         }
 
@@ -38,7 +54,7 @@ fn detect_di_container(ctx: &DetectionContext, results: &mut Vec<PatternMatch>) 
                         let rest = &sig[start..];
                         if let Some(ts) = rest.find('<') {
                             if let Some(te) = rest.find('>') {
-                                let type_arg = &rest[ts+1..te];
+                                let type_arg = &rest[ts + 1..te];
                                 registered_ifaces.push(type_arg.to_string());
                             }
                         }
@@ -65,15 +81,22 @@ fn detect_di_container(ctx: &DetectionContext, results: &mut Vec<PatternMatch>) 
 
 fn detect_controller_api(ctx: &DetectionContext, results: &mut Vec<PatternMatch>) {
     for class in ctx.type_graph.classes.values() {
-        if class.is_abstract { continue; }
+        if class.is_abstract {
+            continue;
+        }
 
-        let action_methods: Vec<_> = class.methods.iter()
+        let action_methods: Vec<_> = class
+            .methods
+            .iter()
             .filter(|m| {
-                !m.method.starts_with("get_") && !m.method.starts_with("set_")
+                !m.method.starts_with("get_")
+                    && !m.method.starts_with("set_")
                     && m.method != class.name
             })
             .collect();
-        if action_methods.len() < 2 { continue; }
+        if action_methods.len() < 2 {
+            continue;
+        }
 
         let extends_controller_base = is_controller_base(&class.name, ctx);
         let has_http_attr = action_methods.iter().any(|m| has_http_attribute(m, ctx));
@@ -84,18 +107,24 @@ fn detect_controller_api(ctx: &DetectionContext, results: &mut Vec<PatternMatch>
                 class: class.name.clone(),
                 description: format!(
                     "'{}' with {} action methods — Controller API",
-                    class.name, action_methods.len()
+                    class.name,
+                    action_methods.len()
                 ),
-                confidence: if extends_controller_base && has_http_attr { 0.98 }
-                    else if extends_controller_base { 0.95 }
-                    else { 0.9 },
+                confidence: if extends_controller_base && has_http_attr {
+                    0.98
+                } else if extends_controller_base {
+                    0.95
+                } else {
+                    0.9
+                },
                 participants: vec![class.name.clone()],
                 evidence: action_methods.iter().map(|m| m.method.clone()).collect(),
             });
             continue;
         }
 
-        let with_params = action_methods.iter()
+        let with_params = action_methods
+            .iter()
             .filter(|m| {
                 let sig = &m.signature;
                 if let Some(start) = sig.find('(') {
@@ -112,7 +141,9 @@ fn detect_controller_api(ctx: &DetectionContext, results: &mut Vec<PatternMatch>
                 class: class.name.clone(),
                 description: format!(
                     "'{}' has {} action methods ({} with params) — Controller API",
-                    class.name, action_methods.len(), with_params
+                    class.name,
+                    action_methods.len(),
+                    with_params
                 ),
                 confidence: 0.7,
                 participants: vec![class.name.clone()],
@@ -122,9 +153,19 @@ fn detect_controller_api(ctx: &DetectionContext, results: &mut Vec<PatternMatch>
     }
 }
 
-fn has_http_attribute(_m: &crate::resolve::types::MethodDescriptor, ctx: &DetectionContext) -> bool {
-    let http_attrs = ["HttpGet", "HttpPost", "HttpPut", "HttpDelete",
-        "HttpPatch", "HttpHead", "HttpOptions"];
+fn has_http_attribute(
+    _m: &crate::resolve::types::MethodDescriptor,
+    ctx: &DetectionContext,
+) -> bool {
+    let http_attrs = [
+        "HttpGet",
+        "HttpPost",
+        "HttpPut",
+        "HttpDelete",
+        "HttpPatch",
+        "HttpHead",
+        "HttpOptions",
+    ];
     for attr in &http_attrs {
         if ctx.source.contains(&format!("[{}]", attr))
             || ctx.source.contains(&format!("[{}(", attr))
@@ -138,7 +179,10 @@ fn has_http_attribute(_m: &crate::resolve::types::MethodDescriptor, ctx: &Detect
 fn is_controller_base(class_name: &str, ctx: &DetectionContext) -> bool {
     let mut current = class_name.to_string();
     loop {
-        let next = ctx.type_graph.classes.get(&current)
+        let next = ctx
+            .type_graph
+            .classes
+            .get(&current)
             .and_then(|c| c.base_class.as_ref().cloned());
         match next {
             Some(base) => {
@@ -161,7 +205,9 @@ fn detect_minimal_api(ctx: &DetectionContext, results: &mut Vec<PatternMatch>) {
         || ctx.source.contains("MapPatch(");
 
     for class in ctx.type_graph.classes.values() {
-        if !class.is_static && class.name != "Program" { continue; }
+        if !class.is_static && class.name != "Program" {
+            continue;
+        }
 
         let has_webapp_param = class.methods.iter().any(|m| {
             let sig = &m.signature;
@@ -173,15 +219,24 @@ fn detect_minimal_api(ctx: &DetectionContext, results: &mut Vec<PatternMatch>) {
             false
         });
 
-        let non_ctor: Vec<_> = class.methods.iter()
+        let non_ctor: Vec<_> = class
+            .methods
+            .iter()
             .filter(|m| m.method != class.name)
             .collect();
-        if non_ctor.is_empty() { continue; }
+        if non_ctor.is_empty() {
+            continue;
+        }
 
-        let confidence = if has_webapp_param && has_map_calls { 0.95 }
-            else if has_map_calls { 0.85 }
-            else if has_webapp_param { 0.8 }
-            else { continue; };
+        let confidence = if has_webapp_param && has_map_calls {
+            0.95
+        } else if has_map_calls {
+            0.85
+        } else if has_webapp_param {
+            0.8
+        } else {
+            continue;
+        };
 
         results.push(PatternMatch {
             pattern: PatternKind::MinimalApi,
@@ -189,7 +244,11 @@ fn detect_minimal_api(ctx: &DetectionContext, results: &mut Vec<PatternMatch>) {
             description: format!(
                 "'{}' uses {} — Minimal API",
                 class.name,
-                if has_map_calls { "MapGet/MapPost endpoints" } else { "WebApplication" }
+                if has_map_calls {
+                    "MapGet/MapPost endpoints"
+                } else {
+                    "WebApplication"
+                }
             ),
             confidence,
             participants: vec![class.name.clone()],

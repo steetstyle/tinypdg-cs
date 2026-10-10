@@ -20,7 +20,8 @@ fn run_detection(source: &str) -> Result<Vec<(PatternKind, f64, String)>> {
     results.extend(detect_behavioral(&ctx));
     results.extend(detect_dotnet(&ctx));
 
-    Ok(results.into_iter()
+    Ok(results
+        .into_iter()
         .map(|m| (m.pattern, m.confidence, m.class))
         .collect())
 }
@@ -34,8 +35,10 @@ fn read_fixture(name: &str) -> Result<String> {
 fn test_refactoring_guru_strategy() -> Result<()> {
     let source = read_fixture("01-Strategy.cs")?;
     let results = run_detection(&source)?;
-    assert!(results.iter().any(|(p, _, _)| *p == PatternKind::Strategy),
-        "Strategy not detected");
+    assert!(
+        results.iter().any(|(p, _, _)| *p == PatternKind::Strategy),
+        "Strategy not detected"
+    );
     Ok(())
 }
 
@@ -43,8 +46,10 @@ fn test_refactoring_guru_strategy() -> Result<()> {
 fn test_refactoring_guru_observer() -> Result<()> {
     let source = read_fixture("02-Observer.cs")?;
     let results = run_detection(&source)?;
-    assert!(results.iter().any(|(p, _, _)| *p == PatternKind::Observer),
-        "Observer not detected");
+    assert!(
+        results.iter().any(|(p, _, _)| *p == PatternKind::Observer),
+        "Observer not detected"
+    );
     Ok(())
 }
 
@@ -54,9 +59,13 @@ fn test_refactoring_guru_command() -> Result<()> {
     let results = run_detection(&source)?;
     // Strategy/Command/State share the same structural detection;
     // call-graph analysis distinguishes them.
-    assert!(results.iter().any(|(p, _, _)| *p == PatternKind::Command
-        || *p == PatternKind::Strategy),
-        "Command/Strategy not detected: {:?}", results);
+    assert!(
+        results
+            .iter()
+            .any(|(p, _, _)| *p == PatternKind::Command || *p == PatternKind::Strategy),
+        "Command/Strategy not detected: {:?}",
+        results
+    );
     Ok(())
 }
 
@@ -64,8 +73,10 @@ fn test_refactoring_guru_command() -> Result<()> {
 fn test_refactoring_guru_singleton() -> Result<()> {
     let source = read_fixture("04-Singleton.cs")?;
     let results = run_detection(&source)?;
-    assert!(results.iter().any(|(p, _, _)| *p == PatternKind::Singleton),
-        "Singleton not detected");
+    assert!(
+        results.iter().any(|(p, _, _)| *p == PatternKind::Singleton),
+        "Singleton not detected"
+    );
     Ok(())
 }
 
@@ -73,8 +84,10 @@ fn test_refactoring_guru_singleton() -> Result<()> {
 fn test_refactoring_guru_adapter() -> Result<()> {
     let source = read_fixture("06-Adapter.cs")?;
     let results = run_detection(&source)?;
-    assert!(results.iter().any(|(p, _, _)| *p == PatternKind::Adapter),
-        "Adapter not detected");
+    assert!(
+        results.iter().any(|(p, _, _)| *p == PatternKind::Adapter),
+        "Adapter not detected"
+    );
     Ok(())
 }
 
@@ -82,8 +95,10 @@ fn test_refactoring_guru_adapter() -> Result<()> {
 fn test_refactoring_guru_composite() -> Result<()> {
     let source = read_fixture("08-Composite.cs")?;
     let results = run_detection(&source)?;
-    assert!(results.iter().any(|(p, _, _)| *p == PatternKind::Composite),
-        "Composite not detected");
+    assert!(
+        results.iter().any(|(p, _, _)| *p == PatternKind::Composite),
+        "Composite not detected"
+    );
     Ok(())
 }
 
@@ -91,8 +106,12 @@ fn test_refactoring_guru_composite() -> Result<()> {
 fn test_refactoring_guru_template_method() -> Result<()> {
     let source = read_fixture("09-TemplateMethod.cs")?;
     let results = run_detection(&source)?;
-    assert!(results.iter().any(|(p, _, _)| *p == PatternKind::TemplateMethod),
-        "TemplateMethod not detected");
+    assert!(
+        results
+            .iter()
+            .any(|(p, _, _)| *p == PatternKind::TemplateMethod),
+        "TemplateMethod not detected"
+    );
     Ok(())
 }
 
@@ -100,8 +119,10 @@ fn test_refactoring_guru_template_method() -> Result<()> {
 fn test_refactoring_guru_visitor() -> Result<()> {
     let source = read_fixture("10-Visitor.cs")?;
     let results = run_detection(&source)?;
-    assert!(results.iter().any(|(p, _, _)| *p == PatternKind::Visitor),
-        "Visitor not detected");
+    assert!(
+        results.iter().any(|(p, _, _)| *p == PatternKind::Visitor),
+        "Visitor not detected"
+    );
     Ok(())
 }
 
@@ -109,8 +130,12 @@ fn test_refactoring_guru_visitor() -> Result<()> {
 fn test_refactoring_guru_chain_of_responsibility() -> Result<()> {
     let source = read_fixture("11-ChainOfResponsibility.cs")?;
     let results = run_detection(&source)?;
-    assert!(results.iter().any(|(p, _, _)| *p == PatternKind::ChainOfResponsibility),
-        "ChainOfResponsibility not detected");
+    assert!(
+        results
+            .iter()
+            .any(|(p, _, _)| *p == PatternKind::ChainOfResponsibility),
+        "ChainOfResponsibility not detected"
+    );
     Ok(())
 }
 
@@ -118,8 +143,12 @@ fn test_refactoring_guru_chain_of_responsibility() -> Result<()> {
 fn test_refactoring_guru_factory_method() -> Result<()> {
     let source = read_fixture("05-FactoryMethod.cs")?;
     let results = run_detection(&source)?;
-    assert!(results.iter().any(|(p, _, _)| *p == PatternKind::FactoryMethod),
-        "FactoryMethod not detected");
+    assert!(
+        results
+            .iter()
+            .any(|(p, _, _)| *p == PatternKind::FactoryMethod),
+        "FactoryMethod not detected"
+    );
     Ok(())
 }
 
@@ -127,8 +156,10 @@ fn test_refactoring_guru_factory_method() -> Result<()> {
 fn test_refactoring_guru_decorator() -> Result<()> {
     let source = read_fixture("07-Decorator.cs")?;
     let results = run_detection(&source)?;
-    assert!(results.iter().any(|(p, _, _)| *p == PatternKind::Decorator),
-        "Decorator not detected");
+    assert!(
+        results.iter().any(|(p, _, _)| *p == PatternKind::Decorator),
+        "Decorator not detected"
+    );
     Ok(())
 }
 
@@ -136,8 +167,10 @@ fn test_refactoring_guru_decorator() -> Result<()> {
 fn test_refactoring_guru_mediator() -> Result<()> {
     let source = read_fixture("12-Mediator.cs")?;
     let results = run_detection(&source)?;
-    assert!(results.iter().any(|(p, _, _)| *p == PatternKind::Mediator),
-        "Mediator not detected");
+    assert!(
+        results.iter().any(|(p, _, _)| *p == PatternKind::Mediator),
+        "Mediator not detected"
+    );
     Ok(())
 }
 
@@ -145,8 +178,10 @@ fn test_refactoring_guru_mediator() -> Result<()> {
 fn test_refactoring_guru_handler() -> Result<()> {
     let source = read_fixture("13-Handler.cs")?;
     let results = run_detection(&source)?;
-    assert!(results.iter().any(|(p, _, _)| *p == PatternKind::Handler),
-        "Handler not detected");
+    assert!(
+        results.iter().any(|(p, _, _)| *p == PatternKind::Handler),
+        "Handler not detected"
+    );
     Ok(())
 }
 
@@ -154,8 +189,12 @@ fn test_refactoring_guru_handler() -> Result<()> {
 fn test_refactoring_guru_abstract_factory() -> Result<()> {
     let source = read_fixture("14-AbstractFactory.cs")?;
     let results = run_detection(&source)?;
-    assert!(results.iter().any(|(p, _, _)| *p == PatternKind::AbstractFactory),
-        "AbstractFactory not detected");
+    assert!(
+        results
+            .iter()
+            .any(|(p, _, _)| *p == PatternKind::AbstractFactory),
+        "AbstractFactory not detected"
+    );
     Ok(())
 }
 
@@ -163,8 +202,12 @@ fn test_refactoring_guru_abstract_factory() -> Result<()> {
 fn test_refactoring_guru_dotnet_mediator() -> Result<()> {
     let source = read_fixture("15-DotnetMediator.cs")?;
     let results = run_detection(&source)?;
-    assert!(results.iter().any(|(p, _, _)| *p == PatternKind::DotnetMediator),
-        "DotnetMediator not detected");
+    assert!(
+        results
+            .iter()
+            .any(|(p, _, _)| *p == PatternKind::DotnetMediator),
+        "DotnetMediator not detected"
+    );
     Ok(())
 }
 
@@ -172,8 +215,12 @@ fn test_refactoring_guru_dotnet_mediator() -> Result<()> {
 fn test_refactoring_guru_controller_api() -> Result<()> {
     let source = read_fixture("16-ControllerApi.cs")?;
     let results = run_detection(&source)?;
-    assert!(results.iter().any(|(p, _, _)| *p == PatternKind::ControllerApi),
-        "ControllerApi not detected");
+    assert!(
+        results
+            .iter()
+            .any(|(p, _, _)| *p == PatternKind::ControllerApi),
+        "ControllerApi not detected"
+    );
     Ok(())
 }
 
@@ -181,7 +228,11 @@ fn test_refactoring_guru_controller_api() -> Result<()> {
 fn test_refactoring_guru_minimal_api() -> Result<()> {
     let source = read_fixture("17-MinimalApi.cs")?;
     let results = run_detection(&source)?;
-    assert!(results.iter().any(|(p, _, _)| *p == PatternKind::MinimalApi),
-        "MinimalApi not detected");
+    assert!(
+        results
+            .iter()
+            .any(|(p, _, _)| *p == PatternKind::MinimalApi),
+        "MinimalApi not detected"
+    );
     Ok(())
 }

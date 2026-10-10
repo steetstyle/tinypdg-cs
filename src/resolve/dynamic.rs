@@ -4,9 +4,7 @@
 //! - No static resolution possible [0% static, 100% runtime]
 //! - We mark call sites as dynamic for tracking purposes
 
-use crate::resolve::types::{
-    CallSite, CallTarget, Confidence,
-};
+use crate::resolve::types::{CallSite, CallTarget, Confidence};
 
 /// Detect if a call target uses C# `dynamic`
 pub fn is_dynamic_call(node: tree_sitter::Node, source: &str) -> bool {
@@ -30,8 +28,12 @@ pub fn is_dynamic_call(node: tree_sitter::Node, source: &str) -> bool {
             }
             if !cursor.goto_first_child() {
                 loop {
-                    if cursor.goto_next_sibling() { break; }
-                    if !cursor.goto_parent() { break; }
+                    if cursor.goto_next_sibling() {
+                        break;
+                    }
+                    if !cursor.goto_parent() {
+                        break;
+                    }
                 }
             }
         }
@@ -40,10 +42,7 @@ pub fn is_dynamic_call(node: tree_sitter::Node, source: &str) -> bool {
 }
 
 /// Resolve a dynamic call (always marked as Unknown)
-pub fn resolve_dynamic(
-    target: &CallTarget,
-    caller: &str,
-) -> Vec<CallSite> {
+pub fn resolve_dynamic(target: &CallTarget, caller: &str) -> Vec<CallSite> {
     vec![CallSite {
         caller: caller.to_string(),
         target: target.clone(),
