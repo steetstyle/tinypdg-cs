@@ -8,6 +8,7 @@ pub mod parse;
 pub mod pdg;
 pub mod resolve;
 pub mod route;
+pub mod source;
 pub mod traverse;
 
 #[cfg(feature = "mcp")]

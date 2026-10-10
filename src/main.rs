@@ -126,63 +126,93 @@ fn main() {
         .init();
 
     let cli = Cli::parse();
-    let result = match cli.command {
-        Commands::Parse { file } => tiny_pdg_cs::cli::commands::handle_parse(&file),
-        Commands::Cfg { file, format } => {
-            tiny_pdg_cs::cli::commands::handle_cfg(&file, format.as_deref())
-        }
-        Commands::Pdg { file, format } => {
-            tiny_pdg_cs::cli::commands::handle_pdg(&file, format.as_deref())
-        }
-        Commands::Hammock { file, level: _ } => {
-            tiny_pdg_cs::cli::commands::handle_hammock(&file, None)
-        }
-        Commands::Resolve { path, kind } => {
-            tiny_pdg_cs::cli::commands::handle_resolve(&path, kind.as_deref())
-        }
-        Commands::Detect { path } => tiny_pdg_cs::cli::commands::handle_detect(&path),
-        Commands::Callgraph {
-            path,
-            class,
-            depth,
-            outbound,
-            inbound,
-            trace,
-        } => tiny_pdg_cs::cli::commands::handle_callgraph(
-            &path,
-            class.as_deref(),
-            depth,
-            outbound,
-            inbound,
-            trace,
-        ),
-        Commands::Serve {
-            http,
-            bind,
-            port,
-            path,
-        } => serve(http, bind, port, path),
-        Commands::Route { path, json } => tiny_pdg_cs::cli::commands::handle_route(&path, json),
-        Commands::Traverse {
-            path,
-            class,
-            context,
-        } => tiny_pdg_cs::cli::commands::handle_traverse(&path, &class, context.as_deref()),
-        Commands::Impact {
-            path,
-            class,
-            method,
-        } => tiny_pdg_cs::cli::commands::handle_impact(&path, &class, &method),
-        Commands::Diffimpact {
-            v1,
-            v2,
-            class,
-            method,
-        } => tiny_pdg_cs::cli::commands::handle_diffimpact(&v1, &v2, &class, &method),
-    };
+    // Wrapped so a source specifier can be resolved with `?`: a fetch failure has to
+    // abort before the command runs, not be turned into a confusing error from inside
+    // whichever handler happened to be handed a bad path.
+    let result: anyhow::Result<()> = (|| {
+        match cli.command {
+            Commands::Parse { file } => {
+                tiny_pdg_cs::cli::commands::handle_parse(&source_arg(&file, false)?)
+            }
+            Commands::Cfg { file, format } => tiny_pdg_cs::cli::commands::handle_cfg(
+                &source_arg(&file, false)?,
+                format.as_deref(),
+            ),
+            Commands::Pdg { file, format } => tiny_pdg_cs::cli::commands::handle_pdg(
+                &source_arg(&file, false)?,
+                format.as_deref(),
+            ),
+            Commands::Hammock { file, level: _ } => {
+                tiny_pdg_cs::cli::commands::handle_hammock(&source_arg(&file, false)?, None)
+            }
+            Commands::Resolve { path, kind } => {
+                tiny_pdg_cs::cli::commands::handle_resolve(&path, kind.as_deref())
+            }
+            Commands::Detect { path } => {
+                tiny_pdg_cs::cli::commands::handle_detect(&source_arg(&path, true)?)
+            }
+            Commands::Callgraph {
+                path,
+                class,
+                depth,
+                outbound,
+                inbound,
+                trace,
+            } => tiny_pdg_cs::cli::commands::handle_callgraph(
+                &source_arg(&path, true)?,
+                class.as_deref(),
+                depth,
+                outbound,
+                inbound,
+                trace,
+            ),
+            Commands::Serve {
+                http,
+                bind,
+                port,
+                path,
+            } => serve(http, bind, port, path),
+            Commands::Route { path, json } => {
+                tiny_pdg_cs::cli::commands::handle_route(&source_arg(&path, true)?, json)
+            }
+            Commands::Traverse {
+                path,
+                class,
+                context,
+            } => tiny_pdg_cs::cli::commands::handle_traverse(
+                &source_arg(&path, true)?,
+                &class,
+                context.as_deref(),
+            ),
+            Commands::Impact {
+                path,
+                class,
+                method,
+            } => tiny_pdg_cs::cli::commands::handle_impact(
+                &source_arg(&path, true)?,
+                &class,
+                &method,
+            ),
+            Commands::Diffimpact {
+                v1,
+                v2,
+                class,
+                method,
+            } => tiny_pdg_cs::cli::commands::handle_diffimpact(
+                &source_arg(&v1, true)?,
+                &source_arg(&v2, true)?,
+                &class,
+                &method,
+            ),
+        };
+        Ok(())
+    })();
 
     if let Err(e) = result {
-        eprintln!("Error: {}", e);
+        // `{:#}`, not `{}`: anyhow prints only the outermost context with `{}`, and the
+        // context is the *summary*. A git failure reported as "running git to fetch X"
+        // with the underlying errno missing sends the reader to the wrong place.
+        eprintln!("Error: {e:#}");
         std::process::exit(1);
     }
 }
@@ -192,6 +222,23 @@ fn main() {
 /// Stdio by default, which is what MCP clients launch. `--http` serves Streamable
 /// HTTP instead, for shared or remote deployments.
 #[cfg(feature = "mcp")]
+
+/// Turn a `gh:owner/repo@ref` argument into a local path before a command runs.
+///
+/// Every command that takes a source goes through here, so GitHub support is one
+/// insertion point rather than one per handler. The `file` commands are told apart from
+/// the `path` ones because the subpath of a specifier may name either, and only the
+/// directory form is checked for being a directory.
+fn source_arg(spec: &str, want_directory: bool) -> anyhow::Result<String> {
+    tiny_pdg_cs::source::announce(spec);
+    let resolved = if want_directory {
+        tiny_pdg_cs::source::resolve(spec)?.dir
+    } else {
+        tiny_pdg_cs::source::resolve_path(spec)?
+    };
+    Ok(resolved.to_string_lossy().into_owned())
+}
+
 fn serve(http: bool, bind: std::net::IpAddr, port: u16, path: String) -> anyhow::Result<()> {
     if http {
         return serve_http(bind, port, path);

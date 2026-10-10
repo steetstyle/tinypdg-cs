@@ -5,7 +5,7 @@
 //! in `cli::commands` stay for humans.
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::PathBuf;
 
 use petgraph::graph::NodeIndex;
 use serde::{Deserialize, Serialize};
@@ -50,10 +50,23 @@ pub struct CallerInfo {
     pub evidence: Vec<usize>,
 }
 
+/// Resolve a source argument to a local directory, fetching a GitHub specifier.
+///
+/// Every tool takes the same string, so "gh:owner/repo" means the same thing here as in
+/// the CLI, and the cache means a second call with the same specifier does not re-clone.
+fn source_dir(spec: &str, tool: &str) -> Result<PathBuf, String> {
+    crate::source::resolve(spec)
+        .map(|checkout| checkout.dir)
+        .map_err(|e| format!("{tool} could not resolve '{spec}': {e:#}"))
+}
+
 pub fn find_callers(args: FindCallersArgs) -> Result<Value, String> {
-    let path = Path::new(&args.path);
-    let project = cache::get_or_build(path).map_err(|e| e.to_string())?;
-    let routes = crate::route::extractor::extract(&args.path).map_err(|e| e.to_string())?;
+    // Resolved once and used for both, because a `gh:` specifier is not a path the route
+    // extractor could read: the checkout has to happen before either of them.
+    let dir = source_dir(&args.path, "find_callers")?;
+    let project = cache::get_or_build(&dir).map_err(|e| e.to_string())?;
+    let routes =
+        crate::route::extractor::extract(&dir.to_string_lossy()).map_err(|e| e.to_string())?;
 
     // Build from the cached graph rather than the path-based wrapper: the wrapper
     // re-parses the whole project on every call, which is exactly what the cache
@@ -222,6 +235,10 @@ pub struct MethodHammocksArgs {
     pub min_blocks: Option<usize>,
 }
 
+/// A region as the forest is built: its line span, and the widest body found for it
+/// together with the blocks that bound it.
+type Region = ((usize, usize), (usize, NodeIndex, NodeIndex));
+
 /// One hammock block, with the parent that makes a traversal walk possible.
 #[derive(Debug, Serialize)]
 pub struct HammockRegion {
@@ -250,7 +267,8 @@ pub struct HammockRegion {
 /// Which is why this is a forest with named nodes and parents rather than a list: a
 /// traversal that can only go "down" has no way to zoom out after it has gone too deep.
 pub fn method_hammocks(args: MethodHammocksArgs) -> Result<Value, String> {
-    let project = cache::get_or_build(Path::new(&args.path)).map_err(|e| e.to_string())?;
+    let project =
+        cache::get_or_build(&source_dir(&args.path, "analyse")?).map_err(|e| e.to_string())?;
 
     let method = project
         .type_graph
@@ -324,8 +342,7 @@ pub fn method_hammocks(args: MethodHammocksArgs) -> Result<Value, String> {
     // ascending `end` would emit the child first — and a reader attaching depth on one
     // pass, or a traversal walking down without backtracking, would meet a parent id
     // that had not been seen yet.
-    let mut regions: Vec<((usize, usize), (usize, NodeIndex, NodeIndex))> =
-        widest.into_iter().collect();
+    let mut regions: Vec<Region> = widest.into_iter().collect();
     regions.sort_by_key(|((s, e), _)| (*s, std::cmp::Reverse(*e)));
 
     let count = regions.len();
@@ -411,7 +428,8 @@ pub fn method_hammocks(args: MethodHammocksArgs) -> Result<Value, String> {
 }
 
 pub fn method_pdg(args: MethodPdgArgs) -> Result<Value, String> {
-    let project = cache::get_or_build(Path::new(&args.path)).map_err(|e| e.to_string())?;
+    let project =
+        cache::get_or_build(&source_dir(&args.path, "analyse")?).map_err(|e| e.to_string())?;
 
     let method = project
         .type_graph
@@ -519,8 +537,10 @@ pub struct ListRoutesArgs {
 }
 
 pub fn list_routes(args: ListRoutesArgs) -> Result<Value, String> {
-    let (table, stats) =
-        crate::route::extractor::extract_with_stats(&args.path).map_err(|e| e.to_string())?;
+    let (table, stats) = crate::route::extractor::extract_with_stats(
+        &source_dir(&args.path, "list_routes")?.to_string_lossy(),
+    )
+    .map_err(|e| e.to_string())?;
 
     let needle = args.filter.as_ref().map(|f| f.to_lowercase());
     let verb = args.http_method.as_ref().map(|v| v.to_uppercase());
@@ -596,7 +616,8 @@ pub struct FindPatternsArgs {
 }
 
 pub fn find_patterns(args: FindPatternsArgs) -> Result<Value, String> {
-    let project = cache::get_or_build(Path::new(&args.path)).map_err(|e| e.to_string())?;
+    let project =
+        cache::get_or_build(&source_dir(&args.path, "analyse")?).map_err(|e| e.to_string())?;
 
     let mut tg = project.type_graph.clone();
     // Detection reads method source for HTTP attributes, so per-file sources
@@ -715,11 +736,13 @@ pub fn diff_impact(args: DiffImpactArgs) -> Result<Value, String> {
     // time inside build_impact_graph, and tracing N changed methods through it
     // would parse N+1 times — on a 1667-file solution that is seconds per call.
     // v1's type graph is not needed: the comparison only uses call edges.
-    let (_, cg1) = crate::cli::commands::load_project(std::path::Path::new(&args.path_v1))
+    let dir_v1 = source_dir(&args.path_v1, "diff_impact")?;
+    let dir_v2 = source_dir(&args.path_v2, "diff_impact")?;
+    let (_, cg1) = crate::cli::commands::load_project(&dir_v1)
         .map_err(|e| format!("failed to load {}: {e:#}", args.path_v1))?;
-    let (tg2, cg2) = crate::cli::commands::load_project(std::path::Path::new(&args.path_v2))
+    let (tg2, cg2) = crate::cli::commands::load_project(&dir_v2)
         .map_err(|e| format!("failed to load {}: {e:#}", args.path_v2))?;
-    let routes2 = crate::route::extractor::extract(&args.path_v2)
+    let routes2 = crate::route::extractor::extract(&dir_v2.to_string_lossy())
         .map_err(|e| format!("failed to extract routes from {}: {e:#}", args.path_v2))?;
 
     let changes = compute_changes(&cg1, &cg2);
@@ -858,8 +881,8 @@ pub struct CalleeInfo {
 /// The complement to `find_callers`: knowing who reaches a method says nothing
 /// about what it then does, which is the other half of "why did this fail".
 pub fn method_callees(args: MethodCalleesArgs) -> Result<Value, String> {
-    let path = Path::new(&args.path);
-    let project = cache::get_or_build(path).map_err(|e| e.to_string())?;
+    let path = source_dir(&args.path, "analyse")?;
+    let project = cache::get_or_build(&path).map_err(|e| e.to_string())?;
 
     let start = format!("{}.{}", args.class, args.method);
     if project
@@ -948,7 +971,8 @@ pub struct ProjectSummaryArgs {
 
 /// Orientation tool: what is in this project before asking anything else.
 pub fn project_summary(args: ProjectSummaryArgs) -> Result<Value, String> {
-    let project = cache::get_or_build(Path::new(&args.path)).map_err(|e| e.to_string())?;
+    let project =
+        cache::get_or_build(&source_dir(&args.path, "analyse")?).map_err(|e| e.to_string())?;
 
     let methods: usize = project
         .type_graph
@@ -986,7 +1010,8 @@ pub fn project_summary(args: ProjectSummaryArgs) -> Result<Value, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::{Path, PathBuf};
+    use std::path::Path;
+    use std::path::PathBuf;
 
     /// Write a source file into a fixture directory, creating subdirectories.
     fn write(dir: &Path, name: &str, content: &str) {
