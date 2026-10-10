@@ -2,6 +2,7 @@ pub mod analysis;
 pub mod cfg;
 pub mod cli;
 pub mod detect;
+pub mod embed;
 pub mod github;
 pub mod graph;
 pub mod hammock;

@@ -90,6 +90,63 @@ enum Commands {
         #[arg(help = "A directory, or gh:owner/repo@ref[:subpath]")]
         spec: String,
     },
+    /// Embed a project's symbols into a vector store
+    Embed {
+        #[arg(help = "Project directory with C# sources")]
+        path: String,
+        /// Where the vectors live: a path, sqlite:<path>, or postgres:<url>
+        #[arg(long, value_name = "STORE")]
+        store: String,
+        /// `hashing` (no key, offline) or `openai` (any /v1/embeddings server)
+        #[arg(long)]
+        provider: Option<String>,
+        /// The model, for the openai provider. For hashing, `hashing-<width>` picks the width
+        #[arg(long)]
+        model: Option<String>,
+        /// Empty the store first. Required to change model or width
+        #[arg(long)]
+        reset: bool,
+    },
+    /// Find symbols by meaning rather than by name
+    Semantic {
+        /// What to look for, in words rather than in identifiers
+        query: String,
+        /// Where the vectors live: a path, sqlite:<path>, or postgres:<url>
+        #[arg(long, value_name = "STORE")]
+        store: String,
+        /// `hashing` or `openai`, matching how the store was built
+        #[arg(long)]
+        provider: Option<String>,
+        #[arg(long)]
+        model: Option<String>,
+        #[arg(long, default_value = "10", help = "How many results (1-100)")]
+        limit: usize,
+        #[arg(long, help = "JSON output instead of a table")]
+        json: bool,
+    },
+    /// Find symbols by name and meaning together, and report which source found what
+    Context {
+        /// What to look for, in words rather than in identifiers
+        query: String,
+        /// Where the vectors live
+        #[arg(long, value_name = "STORE")]
+        store: String,
+        /// `hashing` or `openai`, matching how the store was built
+        #[arg(long)]
+        provider: Option<String>,
+        #[arg(long)]
+        model: Option<String>,
+        #[arg(long, default_value = "10", help = "How many anchors (1-100)")]
+        limit: usize,
+        #[arg(long, help = "JSON output instead of a table")]
+        json: bool,
+    },
+    /// What a vector store holds
+    Embedinfo {
+        /// Where the vectors live
+        #[arg(long, value_name = "STORE")]
+        store: String,
+    },
     /// Serve static code analysis over MCP for AI agents
     Serve {
         /// Serve over Streamable HTTP instead of stdio
@@ -187,6 +244,44 @@ fn main() {
         Commands::Detect { path } => {
             tiny_pdg_cs::cli::commands::handle_detect(&source_arg(&path, true)?)
         }
+        Commands::Embed {
+            path,
+            store,
+            provider,
+            model,
+            reset,
+        } => handle_embed(&path, &store, provider.as_deref(), model.as_deref(), reset),
+        Commands::Semantic {
+            query,
+            store,
+            provider,
+            model,
+            limit,
+            json,
+        } => handle_semantic(
+            &query,
+            &store,
+            provider.as_deref(),
+            model.as_deref(),
+            limit,
+            json,
+        ),
+        Commands::Context {
+            query,
+            store,
+            provider,
+            model,
+            limit,
+            json,
+        } => handle_context(
+            &query,
+            &store,
+            provider.as_deref(),
+            model.as_deref(),
+            limit,
+            json,
+        ),
+        Commands::Embedinfo { store } => handle_embedinfo(&store),
         Commands::Where { spec } => {
             // announce() first, so a reference nobody has fetched still says it fetched.
             // It says nothing on a cache hit on purpose -- printing on every invocation
@@ -254,6 +349,149 @@ fn main() {
         eprintln!("Error: {e:#}");
         std::process::exit(1);
     }
+}
+
+/// `embed` — index a project's symbols into a vector store.
+fn handle_embed(
+    path: &str,
+    store_spec: &str,
+    provider: Option<&str>,
+    model: Option<&str>,
+    reset: bool,
+) -> anyhow::Result<()> {
+    use tiny_pdg_cs::embed::{index_project, open_store, ProviderSpec};
+
+    let spec = ProviderSpec::resolve(provider, model).map_err(anyhow::Error::msg)?;
+    let provider = spec.build().map_err(anyhow::Error::msg)?;
+    let mut store = open_store(store_spec).map_err(anyhow::Error::msg)?;
+
+    let report = index_project(
+        store.as_mut(),
+        provider.as_ref(),
+        std::path::Path::new(path),
+        reset,
+    )
+    .map_err(anyhow::Error::msg)?;
+
+    println!(
+        "Embedded {} symbol(s) from {} file(s) into {}",
+        report.embedded, report.files, report.store
+    );
+    println!("  model: {} ({} dim)", report.model, report.dim);
+    println!("  took:  {} ms", report.elapsed_ms);
+    if !report.failed.is_empty() {
+        // Counted and reported, not fatal: one file mid-edit should not cost the other
+        // two hundred.
+        println!("  skipped {} file(s):", report.failed.len());
+        for (file, reason) in report.failed.iter().take(10) {
+            println!("    {file}: {reason}");
+        }
+        if report.failed.len() > 10 {
+            println!("    ... and {} more", report.failed.len() - 10);
+        }
+    }
+    Ok(())
+}
+
+/// `semantic` — nearest symbols by meaning.
+fn handle_semantic(
+    query: &str,
+    store_spec: &str,
+    provider: Option<&str>,
+    model: Option<&str>,
+    limit: usize,
+    json: bool,
+) -> anyhow::Result<()> {
+    use tiny_pdg_cs::embed::{open_store, search, ProviderSpec};
+
+    let spec = ProviderSpec::resolve(provider, model).map_err(anyhow::Error::msg)?;
+    let provider = spec.build().map_err(anyhow::Error::msg)?;
+    let store = open_store(store_spec).map_err(anyhow::Error::msg)?;
+
+    let hits =
+        search(store.as_ref(), provider.as_ref(), query, limit).map_err(anyhow::Error::msg)?;
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&hits)?);
+        return Ok(());
+    }
+
+    println!("{} result(s) for {query:?}:", hits.len());
+    for (i, hit) in hits.iter().enumerate() {
+        println!("  {}. {}  [{:.3}]", i + 1, hit.entry.symbol_id, hit.score);
+        println!("     {}:{}", hit.entry.file, hit.entry.line);
+    }
+    Ok(())
+}
+
+/// `context` — name-based and meaning-based search together, with the sources named.
+fn handle_context(
+    query: &str,
+    store_spec: &str,
+    provider: Option<&str>,
+    model: Option<&str>,
+    limit: usize,
+    json: bool,
+) -> anyhow::Result<()> {
+    use tiny_pdg_cs::embed::{find_context, open_store, ProviderSpec};
+
+    let spec = ProviderSpec::resolve(provider, model).map_err(anyhow::Error::msg)?;
+    let provider = spec.build().map_err(anyhow::Error::msg)?;
+    let store = open_store(store_spec).map_err(anyhow::Error::msg)?;
+
+    let ctx = find_context(store.as_ref(), provider.as_ref(), query, limit)
+        .map_err(anyhow::Error::msg)?;
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&ctx)?);
+        return Ok(());
+    }
+
+    println!(
+        "{} anchor(s) for {query:?}  [{}: {}, {} entries searched]",
+        ctx.anchors.len(),
+        ctx.model,
+        ctx.store.rsplit('/').next().unwrap_or(&ctx.store),
+        ctx.searched
+    );
+    for (i, anchor) in ctx.anchors.iter().enumerate() {
+        let sources = anchor.sources.join("+");
+        println!("  {}. {}  [{}]", i + 1, anchor.symbol_id, sources);
+        println!(
+            "     {}:{}{}",
+            anchor.file,
+            anchor.line,
+            anchor
+                .similarity
+                .map(|s| format!("  {s:.3}"))
+                .unwrap_or_default()
+        );
+    }
+    println!(
+        "  confidence: {} -- {}",
+        ctx.coverage.confidence, ctx.coverage.note
+    );
+    Ok(())
+}
+
+/// `embedinfo` — what a store holds.
+fn handle_embedinfo(store_spec: &str) -> anyhow::Result<()> {
+    use tiny_pdg_cs::embed::open_store;
+
+    let store = open_store(store_spec).map_err(anyhow::Error::msg)?;
+    let info = store.info().map_err(anyhow::Error::msg)?;
+    if info.entries == 0 {
+        println!("{} store at {} is empty", info.backend, info.location);
+        println!("  index it with: tiny-pdg-cs embed <path> --store {store_spec}");
+        return Ok(());
+    }
+    println!(
+        "{} store at {} holds {} vector(s)",
+        info.backend, info.location, info.entries
+    );
+    println!("  model: {}", info.model);
+    println!("  width: {}", info.dim);
+    Ok(())
 }
 
 /// Turn a `gh:owner/repo@ref` argument into a local path before a command runs.

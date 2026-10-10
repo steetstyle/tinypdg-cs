@@ -1040,6 +1040,74 @@ pub fn project_summary(args: ProjectSummaryArgs) -> Result<Value, String> {
     }))
 }
 
+/// Arguments for `find_context`.
+///
+/// `store` is a path, a `sqlite:<path>`, or a `postgres:<url>` -- the same spellings the
+/// CLI's `--store` takes, so a store written by one is readable by the other.
+#[derive(Debug, Default, serde::Deserialize, schemars::JsonSchema)]
+pub struct FindContextArgs {
+    /// Words, not identifiers.
+    pub query: String,
+    pub store: String,
+    pub provider: Option<String>,
+    pub model: Option<String>,
+    #[serde(default)]
+    pub limit: Option<usize>,
+}
+
+/// Search by name and by meaning together, and report which source found what.
+///
+/// Every symbol in the answer says whether `explicit`, `lexical` or `semantic` found it,
+/// because a symbol found by one source is that source's opinion and a symbol found by
+/// two is usually right. The vector only ever contributes the `semantic` label; the
+/// ordering comes from how many sources agreed.
+pub fn handle_find_context(args: &FindContextArgs) -> Result<Value, String> {
+    use crate::embed::{find_context, open_store, ProviderSpec};
+
+    let spec = ProviderSpec::resolve(args.provider.as_deref(), args.model.as_deref())?;
+    let provider = spec.build()?;
+    let store = open_store(&args.store)?;
+
+    let ctx = find_context(
+        store.as_ref(),
+        provider.as_ref(),
+        &args.query,
+        args.limit.unwrap_or(10).clamp(1, 100),
+    )?;
+    serde_json::to_value(ctx).map_err(|e| e.to_string())
+}
+
+/// Arguments for `embed_index`.
+#[derive(Debug, Default, serde::Deserialize, schemars::JsonSchema)]
+pub struct EmbedIndexArgs {
+    pub path: String,
+    pub store: String,
+    pub provider: Option<String>,
+    pub model: Option<String>,
+    #[serde(default)]
+    pub reset: Option<bool>,
+}
+
+/// Index a project's symbols into a vector store.
+///
+/// Needs no key with `provider: hashing`. Reports skipped files rather than failing on
+/// them, because one file mid-edit should not cost the rest of the repository.
+pub fn handle_embed_index(args: &EmbedIndexArgs) -> Result<Value, String> {
+    use crate::embed::{index_project, open_store, ProviderSpec};
+
+    let spec = ProviderSpec::resolve(args.provider.as_deref(), args.model.as_deref())?;
+    let provider = spec.build()?;
+    let mut store = open_store(&args.store)?;
+
+    let report = index_project(
+        store.as_mut(),
+        provider.as_ref(),
+        std::path::Path::new(&args.path),
+        args.reset.unwrap_or(false),
+    )?;
+    serde_json::to_value(report).map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

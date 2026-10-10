@@ -16,6 +16,17 @@ anyhow = "1"
 thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# The vector store's SQLite backend. Same version tinylink pins, bundled, so there is
+# no system SQLite to install and no second copy in the workspace.
+rusqlite = { version = "0.37", features = ["bundled"] }
+# Token hashing for the offline embedding provider. Already a dependency of the crates
+# in this workspace, so this costs no new download; and a persisted fingerprint needs a
+# hash that is stable across releases, which DefaultHasher is not.
+blake3 = "1"
+# The pgvector backend. Synchronous on purpose, like every other tool in this crate:
+# the MCP handlers are plain `fn` and an async client would make the sync paths
+# second-class. rustls, so no OpenSSL to install.
+postgres = "0.19"
 
 # MCP server (`tiny-pdg-cs serve`). Gated so the library stays usable without a
 # tokio runtime or an MCP stack; every MCP tool is also available via the CLI.

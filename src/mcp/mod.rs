@@ -41,7 +41,7 @@ impl Default for AnalysisServer {
 /// over_http` was asserting 8 while the router served 9, because `search_github` was
 /// added and the number was not. The point of the assertion is that the transport does
 /// not lose tools, and a hand-kept count cannot tell lost from added.
-pub const LISTED_TOOLS: [&str; 9] = [
+pub const LISTED_TOOLS: [&str; 11] = [
     "project_summary",
     "list_routes",
     "find_callers",
@@ -51,6 +51,8 @@ pub const LISTED_TOOLS: [&str; 9] = [
     "diff_impact",
     "method_hammocks",
     "search_github",
+    "find_context",
+    "embed_index",
 ];
 
 #[tool_router(router = tool_router)]
@@ -64,6 +66,42 @@ impl AnalysisServer {
     /// Orientation: what classes, methods and call sites are in this project.
     /// Start here before asking anything else, so later calls can name real
     /// classes and methods instead of guessing.
+    /// Find symbols by name and by meaning, and report which source found what.
+    #[tool(
+        name = "find_context",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        ),
+        description = "Find symbols in an indexed project by meaning as well as by name, and report which sources found each one. `query` is words, not identifiers: 'why does the agency member list time out' is a better query than 'GetAgencyMembers'. Every answer labels each symbol with `explicit` (the query named it), `lexical` (it shares words with the symbol) and `semantic` (a vector says they mean the same thing), plus a `coverage.confidence` of high or low.\n\nUse it when the task text names nothing the call graph already knows -- that is what it is for. Read the source list before acting: two sources agreeing is usually right, one is a guess. It does NOT rank by similarity; position comes from how many sources found the symbol, strongest first.\n\n`store` is where the vectors live: a path, sqlite:<path>, or postgres:<url>. Run `embed` first -- this tool says so if the store is empty. `provider`/`model` must match how the store was built: hashing (default, no key) or openai with any /v1/embeddings server."
+    )]
+    pub async fn find_context(
+        &self,
+        args: Parameters<tools::FindContextArgs>,
+    ) -> Result<String, McpError> {
+        wrap(tools::handle_find_context(&args.0))
+    }
+
+    /// Index a project's symbols into a vector store.
+    #[tool(
+        name = "embed_index",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        ),
+        description = "Index a C# project's symbols into a vector store so find_context can search it by meaning. Symbols, not file chunks: one entry per method and per type, each keeping its file and line. Needs no key with `provider: hashing`.\n\nPass `reset` when changing provider or model: a store holds one model at a time and refuses mixed queries, so re-indexing without reset leaves the store answering with the old model.\n\nReports how many files were skipped and why rather than failing on them; one file mid-edit should not cost the rest of the repository."
+    )]
+    pub async fn embed_index(
+        &self,
+        args: Parameters<tools::EmbedIndexArgs>,
+    ) -> Result<String, McpError> {
+        wrap(tools::handle_embed_index(&args.0))
+    }
+
     #[tool(
         name = "project_summary",
         description = "List classes, method counts and call-site totals for a C# project or file. Largest classes come first, since HTTP entry points usually live there. Use this first to learn the real class and method names in a codebase.",
@@ -297,19 +335,41 @@ mod tests {
         );
     }
 
+    /// The tools that write. Everything else here reads.
+    ///
+    /// Named rather than inferred: a tool that writes has to be added to this list, so
+    /// claiming read-only stays a deliberate act rather than the default. `embed_index`
+    /// is here because it writes a vector store.
+    const WRITING_TOOLS: [&str; 1] = ["embed_index"];
+
     #[test]
-    fn every_tool_is_marked_read_only() {
+    fn every_tool_is_marked_and_says_whether_it_writes() {
         let router = AnalysisServer::tool_router();
         for tool in router.list_all() {
             let annotations = tool
                 .annotations
                 .as_ref()
                 .unwrap_or_else(|| panic!("{} has no annotations", tool.name));
+            let writes = WRITING_TOOLS.contains(&tool.name.as_ref());
             assert_eq!(
                 annotations.read_only_hint,
-                Some(true),
-                "{} must be advertised as read-only",
-                tool.name
+                Some(!writes),
+                "{} advertises read_only={} but {}",
+                tool.name,
+                annotations.read_only_hint.unwrap_or(true),
+                if writes {
+                    "is listed as writing"
+                } else {
+                    "is not listed as writing"
+                }
+            );
+            // A tool absent from the list that writes anyway would be advertised
+            // read-only, which is a lie an agent acts on.
+            assert!(
+                WRITING_TOOLS
+                    .iter()
+                    .all(|w| router.list_all().iter().any(|t| &t.name == w)),
+                "WRITING_TOOLS names a tool that does not exist"
             );
             assert!(
                 tool.description.is_some(),
