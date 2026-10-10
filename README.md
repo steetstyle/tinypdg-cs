@@ -429,6 +429,12 @@ cargo build --release --features mcp       # serve over stdio
 cargo build --release --features mcp-http  # serve over Streamable HTTP too
 ```
 
+> A plain `cargo build --release` writes to the same path and leaves a binary that
+> cannot serve: it exits with `serve requires the mcp feature`. Anything that
+> launches this one over stdio -- an MCP client config, a script, another crate's
+> tests -- goes down until you rebuild with the feature. `cargo build` (debug)
+> writes elsewhere and does not have this effect.
+
 ```bash
 tiny-pdg-cs serve                    # stdio
 tiny-pdg-cs serve --http --port 8081 # Streamable HTTP
