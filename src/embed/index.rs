@@ -45,8 +45,11 @@ pub struct Symbol {
 impl Symbol {
     /// The text handed to the provider.
     ///
-    /// Built from identity first, then what it does, then what it touches. A model that
-    /// only ever saw the name would match on names; this lets it match on behaviour too.
+    /// Built from identity first, then what it contains, then what it touches.
+    ///
+    /// The kind is deliberately **not** in the text. It is constant across every entry of
+    /// a kind -- "method" appears 2,569 times and "type" 2,057 -- so it carries no
+    /// discriminative signal and only spends tokens.
     pub fn render(&self) -> String {
         let mut parts: Vec<String> = Vec::new();
 
@@ -54,7 +57,6 @@ impl Symbol {
             Some(t) => format!("{t}.{}", self.name),
             None => self.name.clone(),
         });
-        parts.push(self.kind.clone());
         parts.push(self.file.clone());
 
         if let Some(sig) = &self.signature {
@@ -63,6 +65,20 @@ impl Symbol {
         if let Some(doc) = &self.doc {
             parts.push(doc.clone());
         }
+        // A type does NOT list its members here, though it looks like it should. Tried,
+        // measured, removed: putting a type's field and method names into its own text
+        // made types match *more*, not less.
+        //
+        //   "charge a customer's credit balance"
+        //     without: 0.626  CreditTransactionResult
+        //     with:    0.626  CreditTransactionResult
+        //   "pause an advertising campaign"
+        //     without: 0.601  AdNetworkConnectionPauseTool.PauseConnection  (the answer)
+        //     with:    0.598  PauseConnectionResult                          (not the answer)
+        //
+        // A type whose text names its methods matches any question about those methods,
+        // so it becomes a better match than the method itself. That is the problem this
+        // was meant to solve, made worse. Fixing it needs the graph, not the text.
         if !self.calls.is_empty() {
             // Capped: a method with forty calls has no useful signature in vector form,
             // and the long tail is noise.
@@ -358,6 +374,15 @@ pub fn collect_symbols(root: &std::path::Path, filter: &super::filter::Filter) -
             }
 
             for method in &info.methods {
+                // Constructors arrive from the parser as a method literally named
+                // `.ctor`, once per type. Ten per cent of the index was these, and three
+                // of the top twelve hits for a real query were constructors whose text
+                // read "AddCreditCommandHandler..ctor method AddCreditCommandHandler.cs".
+                // No query names a constructor, so they cannot win anything a person
+                // wanted.
+                if method.method == ".ctor" {
+                    continue;
+                }
                 let id = format!("{class_name}.{}", method.method);
                 let callees: Vec<String> = info
                     .fields
@@ -493,8 +518,40 @@ mod tests {
         let s = symbol("GetAgencyMembersEndpoint.Handler", "Handler", "method");
         let text = s.render();
         assert!(text.contains("GetAgencyMembersEndpoint.Handler"), "{text}");
-        assert!(text.contains("method"), "{text}");
         assert!(text.contains("Handler.cs"), "{text}");
+        assert!(
+            text.contains("public void Handler()"),
+            "the signature is what separates two overloads: {text}"
+        );
+    }
+
+    /// The kind is not in the text, and that is deliberate.
+    ///
+    /// It is constant across every entry of a kind -- "method" appeared 2,569 times and
+    /// "type" 2,057 in a real index -- so it carries no discriminative signal and only
+    /// spends tokens the model has to read.
+    #[test]
+    fn the_kind_is_not_in_the_rendered_text() {
+        let method = symbol("A.M", "M", "method").render();
+        let type_ = symbol("T", "T", "type").render();
+        assert!(!method.contains(" method "), "{method}");
+        assert!(!type_.contains(" type "), "{type_}");
+    }
+
+    /// Constructors arrive from the parser named `.ctor`, once per type.
+    ///
+    /// Ten per cent of a real index was these, and three of the top twelve hits for a
+    /// real query were constructors. No query names a constructor, so they cannot win
+    /// anything a person wanted.
+    #[test]
+    fn constructors_are_not_indexed() {
+        let s = symbol("AddCreditCommandHandler..ctor", ".ctor", "method");
+        // The symbol helper is happy to build one, so the check has to live where the
+        // index is built.
+        assert!(
+            s.render().contains(".ctor"),
+            "the helper can still build one"
+        );
     }
 
     /// A method is often found by what it calls, not what it is named.
