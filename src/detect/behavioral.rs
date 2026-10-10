@@ -134,13 +134,13 @@ fn detect_strategy_or_command_or_state(ctx: &DetectionContext, results: &mut Vec
 
             // Decide
             if has_state_self_call || has_state_internal_call {
-                let mut ev = vec![format!("self-call by implementor")];
+                let mut ev = vec!["self-call by implementor".to_string()];
                 if has_state_self_call {
                     ev.push("self-call".into());
                 }
                 (PatternKind::State, 0.75, ev)
             } else if has_invoker {
-                let mut ev = vec![format!("invoker creates implementors")];
+                let mut ev = vec!["invoker creates implementors".to_string()];
                 if has_invoker {
                     ev.push("creates+calls".into());
                 }

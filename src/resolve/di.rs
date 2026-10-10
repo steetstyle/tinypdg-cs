@@ -68,14 +68,11 @@ pub fn resolve_di(
 ) -> Vec<CallSite> {
     let interface = match target {
         CallTarget::DiResolved { interface, .. } => interface,
-        CallTarget::Abstract { interface, .. } => {
+        CallTarget::Abstract { interface, .. }
             // Check if this interface has DI registrations
-            if container.registrations.contains_key(interface) {
+            if container.registrations.contains_key(interface) => {
                 interface
-            } else {
-                return Vec::new();
             }
-        }
         _ => return Vec::new(),
     };
 

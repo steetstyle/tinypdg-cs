@@ -225,7 +225,7 @@ fn main() {
                 *callee_count.entry(call.callee.clone()).or_default() += 1;
             }
             let mut ranked: Vec<_> = callee_count.into_iter().collect();
-            ranked.sort_by(|a, b| b.1.cmp(&a.1));
+            ranked.sort_by_key(|&(_, count)| std::cmp::Reverse(count));
             println!("\n  Top called:");
             for (method, count) in ranked.iter().take(10) {
                 println!("    {} ({}x)", method, count);
@@ -257,7 +257,7 @@ fn main() {
         *callee_count.entry(call.callee.clone()).or_default() += 1;
     }
     let mut ranked: Vec<_> = callee_count.into_iter().collect();
-    ranked.sort_by(|a, b| b.1.cmp(&a.1));
+    ranked.sort_by_key(|&(_, count)| std::cmp::Reverse(count));
     for (method, count) in ranked.iter().take(15) {
         println!("  {} ({} calls)", method, count);
     }

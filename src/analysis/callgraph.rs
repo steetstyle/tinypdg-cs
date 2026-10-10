@@ -145,17 +145,15 @@ impl CallGraphBuilder {
                     }
                 }
 
-                "object_creation_expression" => {
-                    if !current_class.is_empty() {
-                        for i in 0..node.child_count() {
-                            let child = node.child(i).unwrap();
-                            if child.kind() == "identifier" {
-                                if let Ok(ty) = child.utf8_text(source.as_bytes()) {
-                                    cg.class_creations
-                                        .entry(current_class.clone())
-                                        .or_default()
-                                        .insert(ty.to_string());
-                                }
+                "object_creation_expression" if !current_class.is_empty() => {
+                    for i in 0..node.child_count() {
+                        let child = node.child(i).unwrap();
+                        if child.kind() == "identifier" {
+                            if let Ok(ty) = child.utf8_text(source.as_bytes()) {
+                                cg.class_creations
+                                    .entry(current_class.clone())
+                                    .or_default()
+                                    .insert(ty.to_string());
                             }
                         }
                     }

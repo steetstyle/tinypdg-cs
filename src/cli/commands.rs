@@ -254,7 +254,7 @@ pub fn handle_resolve(path: &str, kind: Option<&str>) -> Result<()> {
                     *callee_count.entry(call.callee.clone()).or_default() += 1;
                 }
                 let mut ranked: Vec<_> = callee_count.into_iter().collect();
-                ranked.sort_by(|a, b| b.1.cmp(&a.1));
+                ranked.sort_by_key(|&(_, count)| std::cmp::Reverse(count));
                 for (method, count) in ranked.iter().take(15) {
                     println!("  {} ({} calls)", method, count);
                 }
@@ -698,7 +698,7 @@ pub fn handle_callgraph(
                     *counts.entry(c.clone()).or_default() += 1;
                 }
                 let mut sorted: Vec<_> = counts.into_iter().collect();
-                sorted.sort_by(|a, b| b.1.cmp(&a.1));
+                sorted.sort_by_key(|&(_, count)| std::cmp::Reverse(count));
                 println!("  {} ({} calls):", caller, callees.len());
                 for (callee, count) in sorted.iter().take(5) {
                     println!("    {} ({}x)", callee, count);

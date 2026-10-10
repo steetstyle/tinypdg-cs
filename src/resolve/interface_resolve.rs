@@ -19,14 +19,11 @@ pub fn resolve_interface(
         CallTarget::Virtual {
             class: Some(c),
             method,
-        } => {
-            // If the receiver type is an interface (not a class), treat as abstract
-            if type_graph.interfaces.contains_key(c) {
-                (c, method)
-            } else {
-                return Vec::new();
-            }
         }
+            // If the receiver type is an interface (not a class), treat as abstract
+            if type_graph.interfaces.contains_key(c) => {
+                (c, method)
+            }
         _ => return Vec::new(),
     };
 

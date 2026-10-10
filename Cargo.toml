@@ -49,6 +49,14 @@ mcp-http = ["mcp", "rmcp/transport-streamable-http-server", "dep:axum"]
 name = "mcp_http_test"
 required-features = ["mcp-http"]
 
+# Drives `tiny-pdg-cs serve` as a subprocess rather than linking the router, so it compiles
+# without the feature and then fails: the spawned server exposes no tools, and the six
+# tests report "server closed the stream before responding". Same declaration needed for
+# the same reason as the target above.
+[[test]]
+name = "mcp_server_test"
+required-features = ["mcp"]
+
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
 insta = "1"
