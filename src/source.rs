@@ -365,6 +365,39 @@ pub fn fetch(reference: &GitHubRef) -> anyhow::Result<PathBuf> {
     Ok(dir)
 }
 
+/// The commits one source reference has that another does not.
+///
+/// Returns `None` when the references are not repository references, because a local
+/// directory has no history this can read -- and saying so is different from reporting
+/// an empty list, which reads as "these two versions are identical".
+pub fn commit_range(
+    from: &str,
+    to: &str,
+    limit: usize,
+) -> Option<Result<crate::github::CommitRange, String>> {
+    let from = parse_github(from)?.ok()?;
+    let to = parse_github(to)?.ok()?;
+
+    // The compare endpoint takes refs, so the caller's own spelling is used rather than
+    // a commit the checkout happened to be on. Omitting the reference means the default
+    // branch, which is what the specifier means too.
+    let base = from.reference.clone().unwrap_or_else(|| "HEAD".to_string());
+    let head = to.reference.clone().unwrap_or_else(|| "HEAD".to_string());
+
+    Some(crate::github::compare_commits(
+        &from.owner,
+        &from.repo,
+        &base,
+        &head,
+        limit,
+    ))
+}
+
+/// Whether a specifier names a repository rather than a directory.
+pub fn is_repository(spec: &str) -> bool {
+    matches!(parse_github(spec), Some(Ok(_)))
+}
+
 /// Whether a reference is a commit rather than a branch or a tag.
 ///
 /// A full 40-character hex object id. The length is the test, not the content: a
@@ -725,6 +758,24 @@ mod tests {
         assert!(!checkout.fetched);
         assert_eq!(checkout.dir, dir);
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_local_directory_has_no_commits_to_compare() {
+        // `None`, not an empty range: "these are identical" and "there is nothing here
+        // to compare" are different answers and the caller has to be able to tell.
+        assert!(commit_range("./a", "./b", 10).is_none());
+        assert!(commit_range("gh:o/r", "./b", 10).is_none());
+        assert!(commit_range("./a", "gh:o/r", 10).is_none());
+        assert!(commit_range("gh:o/r@main", "gh:o/r@dev", 10).is_some());
+    }
+
+    #[test]
+    fn a_repository_reference_is_recognised_without_fetching_it() {
+        assert!(is_repository("gh:o/r"));
+        assert!(is_repository("gh:o/r@main:src"));
+        assert!(!is_repository("./local"));
+        assert!(!is_repository("/abs"));
     }
 
     #[test]

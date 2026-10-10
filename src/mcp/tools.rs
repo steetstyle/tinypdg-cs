@@ -828,6 +828,33 @@ pub fn diff_impact(args: DiffImpactArgs) -> Result<Value, String> {
         }
     };
 
+    // The commits between the two references, with their messages.
+    //
+    // Attached to the same response because the question an investigation is actually
+    // asking is "what changed between the deploy that was fine and the one that was
+    // not", and a diff of call edges does not say which of those commits a given change
+    // belongs to. Answering it needs a second call otherwise, and the caller has to
+    // know to make it.
+    let commits = match crate::source::commit_range(&args.path_v1, &args.path_v2, 100) {
+        None => json!({
+            "available": false,
+            "reason": "these are local directories, which have no history to read. \
+                       Use gh:owner/repo@from and gh:owner/repo@to to get the commit \
+                       list with messages.",
+        }),
+        Some(Err(e)) => json!({"available": false, "reason": e}),
+        Some(Ok(range)) => json!({
+            "available": true,
+            "from": range.from,
+            "to": range.to,
+            "ahead_by": range.ahead_by,
+            "behind_by": range.behind_by,
+            "total": range.total,
+            "truncated": range.truncated,
+            "commits": range.commits,
+        }),
+    };
+
     Ok(json!({
         "changes": reported,
         "total_changes": changes.len(),
@@ -835,6 +862,7 @@ pub fn diff_impact(args: DiffImpactArgs) -> Result<Value, String> {
         "other_changes": rest.len(),
         "only_lost_callers": only_lost,
         "truncated": truncated,
+        "commits": commits,
         "impact": impact.map(|g| json!({
             "targets": g.target,
             "affected_methods": g.nodes.len(),

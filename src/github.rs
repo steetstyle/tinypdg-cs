@@ -257,6 +257,102 @@ fn code_result(item: &Value) -> Option<GitHubResult> {
     })
 }
 
+/// One commit between two references.
+#[derive(Debug, Clone, Serialize)]
+pub struct Commit {
+    pub sha: String,
+    pub short_sha: String,
+    /// The first line of the message, which is what almost every reader wants.
+    pub subject: String,
+    /// Everything after the first line: the part that says *why*.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub body: String,
+    pub author: String,
+    pub date: String,
+    pub url: String,
+}
+
+/// The commits between two references.
+#[derive(Debug, Clone, Serialize)]
+pub struct CommitRange {
+    /// The reference the range starts from, as written.
+    pub from: String,
+    /// The reference the range ends at.
+    pub to: String,
+    /// Commits `to` has that `from` does not.
+    pub ahead_by: u64,
+    /// Commits `from` has that `to` does not.
+    pub behind_by: u64,
+    pub total: u64,
+    /// Newest first, which is the order a reader wants and the order git uses.
+    pub commits: Vec<Commit>,
+    /// Set when `commits` holds fewer than `total`. Said rather than left for the reader
+    /// to work out, because a short list that looks complete is worse than a long one.
+    pub truncated: bool,
+}
+
+/// The commits one reference has that another does not.
+///
+/// GitHub's compare endpoint rather than `git log`: the checkouts here are `--depth 1`,
+/// so there is no history for a local log to walk. Fetching the range is also slower and
+/// mutates the cached tree, and a report must not change what it is reporting on.
+pub fn compare_commits(
+    owner: &str,
+    repo: &str,
+    from: &str,
+    to: &str,
+    limit: usize,
+) -> Result<CommitRange, String> {
+    let url = format!(
+        "{API}/repos/{owner}/{repo}/compare/{from}...{to}?per_page={}",
+        limit.clamp(1, 100)
+    );
+    let (body, _) = get(&url, true)?;
+
+    // `status` is GitHub's own word for the relationship: ahead, behind, identical or
+    // diverged. Reported so a reader does not have to infer it from two counts.
+    let commits: Vec<Commit> = body["commits"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .iter()
+        .map(|c| {
+            let message = c["commit"]["message"].as_str().unwrap_or_default();
+            let mut lines = message.lines();
+            Commit {
+                short_sha: c["sha"].as_str().unwrap_or_default()
+                    [..8.min(c["sha"].as_str().unwrap_or_default().len())]
+                    .to_string(),
+                sha: c["sha"].as_str().unwrap_or_default().to_string(),
+                subject: lines.next().unwrap_or_default().to_string(),
+                body: lines.collect::<Vec<_>>().join("\n").trim().to_string(),
+                author: c["commit"]["author"]["name"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string(),
+                date: c["commit"]["author"]["date"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string(),
+                url: c["html_url"].as_str().unwrap_or_default().to_string(),
+            }
+        })
+        .collect();
+
+    let total = body["total_commits"]
+        .as_u64()
+        .unwrap_or(commits.len() as u64);
+    Ok(CommitRange {
+        from: from.to_string(),
+        to: to.to_string(),
+        ahead_by: body["ahead_by"].as_u64().unwrap_or(0),
+        behind_by: body["behind_by"].as_u64().unwrap_or(0),
+        total,
+        truncated: (commits.len() as u64) < total,
+        commits,
+    })
+}
+
 /// Who we are, and whether private results were in scope.
 ///
 /// Never fatal. A search that works should still be returned when the identity lookup
