@@ -46,9 +46,14 @@ jobs:
       - name: test without the mcp feature
         run: cargo test
 
-  # `search` needs a GitHub token and the network. Run on a schedule and on demand
-  # rather than on every push: it is slow, it is rate limited, and a red build here
-  # says something about the network rather than about the code.
+  # Fetching and searching need the network. Run on a schedule and on demand rather
+  # than on every push: slow, rate limited, and a failure says something about the
+  # network rather than about the code.
+  #
+  # The repository under test is this one. A sibling would couple the job to whether
+  # that repo still exists, is still public, and still builds -- none of which is about
+  # anything in this file. tiny-pdg-cs is also a valid C# target: its own fixtures are
+  # real C#, so the analysis has something to find rather than reporting zero files.
   github:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
@@ -56,11 +61,48 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
 
-      - name: a public repository resolves without a token
-        run: cargo run --release -- detect gh:steetstyle/tinylink@main
-
-      - name: a commit resolves to exactly that commit
+      - env:
+          # A job-scoped cache directory, so the checkout a later step inspects is
+          # known rather than guessed.
+          TINY_SOURCE_CACHE: ${{ github.workspace }}/.source-cache
         run: |
           set -eu
-          SHA=$(git ls-remote https://github.com/steetstyle/tinylink main | cut -f1)
-          cargo run --release -- detect "gh:steetstyle/tinylink@$SHA"
+          cargo build --release
+
+          # No token on purpose: a public repository has to resolve without one, and a
+          # token in CI would hide that regression.
+          unset GITHUB_TOKEN TINY_GITHUB_TOKEN
+
+          echo "::group::a branch resolves"
+          ./target/release/tiny-pdg-cs detect gh:steetstyle/tinypdg-cs@main
+
+          echo "::group::a commit resolves to exactly that commit"
+          SHA=$(git ls-remote https://github.com/steetstyle/tinypdg-cs main | cut -f1)
+          ./target/release/tiny-pdg-cs detect "gh:steetstyle/tinypdg-cs@$SHA"
+
+          # Exit code alone would not catch a commit checkout that silently landed on
+          # the branch head: the two produce identical output while the repository is
+          # unchanged, which is exactly the case that matters.
+          #
+          # The path comes from the tool's own line rather than a glob. The cache
+          # directory is a readable prefix plus a hash of the full reference, and the
+          # readable part is truncated, so a glob on the sha does not match -- which is
+          # a failure that only shows up once the sha is long enough.
+          DIR=$(./target/release/tiny-pdg-cs detect "gh:steetstyle/tinypdg-cs@$SHA" 2>&1 \
+                | sed -n 's/^fetched .* -> //p' | tail -1)
+          if [ -z "$DIR" ]; then
+            echo "the tool did not report where it fetched to"
+            exit 1
+          fi
+          ACTUAL=$(git -C "$DIR" rev-parse HEAD)
+          if [ "$ACTUAL" != "$SHA" ]; then
+            echo "checkout is at $ACTUAL, not the requested $SHA"
+            exit 1
+          fi
+          echo "pinned to $ACTUAL"
+
+          echo "::group::a subdirectory narrows to it"
+          ./target/release/tiny-pdg-cs detect "gh:steetstyle/tinypdg-cs@$SHA:tests/fixtures/hammock"
+
+          echo "::group::repository search works without a token"
+          ./target/release/tiny-pdg-cs search tinypdg-cs --kind repositories --limit 3
