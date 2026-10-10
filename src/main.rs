@@ -17,6 +17,23 @@ enum Commands {
         #[arg(help = "Path to .cs file")]
         file: String,
     },
+    /// Search GitHub for repositories or code
+    Search {
+        #[arg(help = "What to look for: a repository name, a topic, or code to find")]
+        query: String,
+        #[arg(
+            long,
+            help = "repositories (default) or code. Code search needs GITHUB_TOKEN"
+        )]
+        kind: Option<String>,
+        /// Limit code search to one repository, as `owner/name`
+        #[arg(long, value_name = "OWNER/NAME")]
+        repo: Option<String>,
+        #[arg(long, default_value = "10", help = "How many results (1-100)")]
+        limit: usize,
+        #[arg(long, help = "JSON output instead of a table")]
+        json: bool,
+    },
     /// Build Control Flow Graph from C# source
     Cfg {
         #[arg(help = "Path to .cs file")]
@@ -126,86 +143,94 @@ fn main() {
         .init();
 
     let cli = Cli::parse();
-    // Wrapped so a source specifier can be resolved with `?`: a fetch failure has to
-    // abort before the command runs, not be turned into a confusing error from inside
-    // whichever handler happened to be handed a bad path.
-    let result: anyhow::Result<()> = (|| {
-        match cli.command {
-            Commands::Parse { file } => {
-                tiny_pdg_cs::cli::commands::handle_parse(&source_arg(&file, false)?)
-            }
-            Commands::Cfg { file, format } => tiny_pdg_cs::cli::commands::handle_cfg(
-                &source_arg(&file, false)?,
-                format.as_deref(),
-            ),
-            Commands::Pdg { file, format } => tiny_pdg_cs::cli::commands::handle_pdg(
-                &source_arg(&file, false)?,
-                format.as_deref(),
-            ),
-            Commands::Hammock { file, level: _ } => {
-                tiny_pdg_cs::cli::commands::handle_hammock(&source_arg(&file, false)?, None)
-            }
-            Commands::Resolve { path, kind } => {
-                tiny_pdg_cs::cli::commands::handle_resolve(&path, kind.as_deref())
-            }
-            Commands::Detect { path } => {
-                tiny_pdg_cs::cli::commands::handle_detect(&source_arg(&path, true)?)
-            }
-            Commands::Callgraph {
-                path,
-                class,
-                depth,
-                outbound,
-                inbound,
-                trace,
-            } => tiny_pdg_cs::cli::commands::handle_callgraph(
-                &source_arg(&path, true)?,
-                class.as_deref(),
-                depth,
-                outbound,
-                inbound,
-                trace,
-            ),
-            Commands::Serve {
-                http,
-                bind,
-                port,
-                path,
-            } => serve(http, bind, port, path),
-            Commands::Route { path, json } => {
-                tiny_pdg_cs::cli::commands::handle_route(&source_arg(&path, true)?, json)
-            }
-            Commands::Traverse {
-                path,
-                class,
-                context,
-            } => tiny_pdg_cs::cli::commands::handle_traverse(
-                &source_arg(&path, true)?,
-                &class,
-                context.as_deref(),
-            ),
-            Commands::Impact {
-                path,
-                class,
-                method,
-            } => tiny_pdg_cs::cli::commands::handle_impact(
-                &source_arg(&path, true)?,
-                &class,
-                &method,
-            ),
-            Commands::Diffimpact {
-                v1,
-                v2,
-                class,
-                method,
-            } => tiny_pdg_cs::cli::commands::handle_diffimpact(
-                &source_arg(&v1, true)?,
-                &source_arg(&v2, true)?,
-                &class,
-                &method,
-            ),
-        };
-        Ok(())
+    // Wrapped in a closure so a source specifier can be resolved with `?`: a fetch
+    // failure has to abort before the command runs, not be turned into a confusing
+    // error from inside whichever handler happened to be handed a bad path.
+    //
+    // The closure's value is the match's value. Ending it with `Ok(())` instead would
+    // discard every handler's Result -- which compiles with a warning and turns every
+    // failure into a silent exit code 0.
+    let result: anyhow::Result<()> = (|| match cli.command {
+        Commands::Search {
+            query,
+            kind,
+            repo,
+            limit,
+            json: as_json,
+        } => tiny_pdg_cs::cli::commands::handle_search(
+            &query,
+            kind.as_deref(),
+            repo.as_deref(),
+            limit,
+            as_json,
+        ),
+        Commands::Parse { file } => {
+            tiny_pdg_cs::cli::commands::handle_parse(&source_arg(&file, false)?)
+        }
+        Commands::Cfg { file, format } => {
+            tiny_pdg_cs::cli::commands::handle_cfg(&source_arg(&file, false)?, format.as_deref())
+        }
+        Commands::Pdg { file, format } => {
+            tiny_pdg_cs::cli::commands::handle_pdg(&source_arg(&file, false)?, format.as_deref())
+        }
+        Commands::Hammock { file, level: _ } => {
+            tiny_pdg_cs::cli::commands::handle_hammock(&source_arg(&file, false)?, None)
+        }
+        Commands::Resolve { path, kind } => {
+            tiny_pdg_cs::cli::commands::handle_resolve(&path, kind.as_deref())
+        }
+        Commands::Detect { path } => {
+            tiny_pdg_cs::cli::commands::handle_detect(&source_arg(&path, true)?)
+        }
+        Commands::Callgraph {
+            path,
+            class,
+            depth,
+            outbound,
+            inbound,
+            trace,
+        } => tiny_pdg_cs::cli::commands::handle_callgraph(
+            &source_arg(&path, true)?,
+            class.as_deref(),
+            depth,
+            outbound,
+            inbound,
+            trace,
+        ),
+        Commands::Serve {
+            http,
+            bind,
+            port,
+            path,
+        } => serve(http, bind, port, path),
+        Commands::Route { path, json } => {
+            tiny_pdg_cs::cli::commands::handle_route(&source_arg(&path, true)?, json)
+        }
+        Commands::Traverse {
+            path,
+            class,
+            context,
+        } => tiny_pdg_cs::cli::commands::handle_traverse(
+            &source_arg(&path, true)?,
+            &class,
+            context.as_deref(),
+        ),
+        Commands::Impact {
+            path,
+            class,
+            method,
+        } => tiny_pdg_cs::cli::commands::handle_impact(&source_arg(&path, true)?, &class, &method),
+        Commands::Diffimpact {
+            v1,
+            v2,
+            class,
+            method,
+        } => tiny_pdg_cs::cli::commands::handle_diffimpact(
+            &source_arg(&v1, true)?,
+            &source_arg(&v2, true)?,
+            &class,
+            &method,
+        ),
     })();
 
     if let Err(e) = result {
@@ -216,12 +241,6 @@ fn main() {
         std::process::exit(1);
     }
 }
-
-/// Run the MCP server.
-///
-/// Stdio by default, which is what MCP clients launch. `--http` serves Streamable
-/// HTTP instead, for shared or remote deployments.
-#[cfg(feature = "mcp")]
 
 /// Turn a `gh:owner/repo@ref` argument into a local path before a command runs.
 ///
@@ -239,6 +258,11 @@ fn source_arg(spec: &str, want_directory: bool) -> anyhow::Result<String> {
     Ok(resolved.to_string_lossy().into_owned())
 }
 
+/// Run the MCP server.
+///
+/// Stdio by default, which is what MCP clients launch. `--http` serves Streamable
+/// HTTP instead, for shared or remote deployments.
+#[cfg(feature = "mcp")]
 fn serve(http: bool, bind: std::net::IpAddr, port: u16, path: String) -> anyhow::Result<()> {
     if http {
         return serve_http(bind, port, path);

@@ -89,6 +89,27 @@ impl GitHubRef {
                 // Checked, because a typo in the subpath would otherwise index whatever
                 // is in the parent directory, and the error would surface much later as a
                 // confusing "no methods found".
+                if path.is_file() {
+                    // Worth distinguishing: a file is a good answer to "where is this",
+                    // and a bad one to "analyse this project". Search results carry both
+                    // spellings, so the message can name the one that works here.
+                    bail!(
+                        "gh:{}/{}{}:{sub} names a file, and this tool needs a directory.\n\
+                         For the whole project use: gh:{}/{}{}",
+                        self.owner,
+                        self.repo,
+                        self.reference
+                            .as_ref()
+                            .map(|r| format!("@{r}"))
+                            .unwrap_or_default(),
+                        self.owner,
+                        self.repo,
+                        self.reference
+                            .as_ref()
+                            .map(|r| format!("@{r}"))
+                            .unwrap_or_default()
+                    );
+                }
                 if !path.is_dir() {
                     bail!(
                         "gh:{}/{}{} has no directory '{sub}'.\n\
@@ -128,13 +149,18 @@ pub fn parse_github(spec: &str) -> Option<anyhow::Result<GitHubRef>> {
         .strip_prefix("gh:")
         .or_else(|| spec.strip_prefix("github:"))?;
 
-    // Split owner/repo from the reference at the first '@'. Branch names may contain
-    // '/', so this cannot be done by taking the last path segment.
+    // Split owner/repo from the rest at the first '@'. Branch names may contain '/', so
+    // this cannot be done by taking the last path segment.
     let (slug, after_ref) = match rest.split_once('@') {
         Some((slug, tail)) => (slug, Some(tail)),
         None => (rest, None),
     };
 
+    // With no '@' the subdirectory may still be there: `gh:o/r:src/Foo.cs`. This is what
+    // a code search result looks like, because GitHub's code search payload does not
+    // name the branch it indexed -- and inventing one would give `@HEAD`, which is
+    // rejected below. Leaving the reference out lets `git clone` choose, and that is
+    // the branch the search actually looked at.
     let (reference, subpath) = match after_ref {
         // A subdirectory cannot contain ':' in git's ref grammar and there is no reason
         // to allow it, so the first ':' after the reference ends it.
@@ -142,8 +168,16 @@ pub fn parse_github(spec: &str) -> Option<anyhow::Result<GitHubRef>> {
             Some((r, sub)) => (Some(r.to_string()), Some(sub.to_string())),
             None => (Some(tail.to_string()), None),
         },
-        None => (None, None),
+        None => match slug.split_once(':') {
+            Some((_, sub)) => (None, Some(sub.to_string())),
+            None => (None, None),
+        },
     };
+    let slug = match after_ref {
+        Some(_) => slug.to_string(),
+        None => slug.split(':').next().unwrap_or(slug).to_string(),
+    };
+    let slug = slug.as_str();
 
     if reference.as_deref() == Some("") {
         return Some(Err(anyhow!(
@@ -286,6 +320,10 @@ pub fn fetch(reference: &GitHubRef) -> anyhow::Result<PathBuf> {
     let parent = dir.parent().expect("a cache path always has a parent");
 
     let result = match reference.reference.as_deref() {
+        // A commit. `--branch` only accepts a branch or a tag, so a raw object id has
+        // to be fetched the way git can actually fetch one: ask the server for the
+        // object by id and check out what comes back. GitHub allows this.
+        Some(r) if looks_like_object_id(r) => fetch_object(&staging, &url, r),
         // A branch or a tag: shallow clone straight at it.
         Some(r) => git(parent)
             .args(["clone", "--depth", "1", "--single-branch", "--branch", r])
@@ -325,6 +363,48 @@ pub fn fetch(reference: &GitHubRef) -> anyhow::Result<PathBuf> {
     std::fs::rename(&staging, &dir)
         .with_context(|| format!("move the checkout of {} into place", reference.slug()))?;
     Ok(dir)
+}
+
+/// Whether a reference is a commit rather than a branch or a tag.
+///
+/// A full 40-character hex object id. The length is the test, not the content: a
+/// shorter hex string is far more likely to be a branch that happens to be named with
+/// digits, and `--branch` handles that case correctly while treating it as an object id
+/// would not.
+fn looks_like_object_id(reference: &str) -> bool {
+    reference.len() == 40 && reference.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// Materialise one commit into an empty directory.
+///
+/// `git clone --branch` cannot do this -- it takes a ref name, not an object id -- so
+/// the repository is initialised and the object is asked for directly. GitHub serves
+/// arbitrary reachable commits this way.
+fn fetch_object(
+    dir: &Path,
+    url: &str,
+    object_id: &str,
+) -> std::io::Result<std::process::ExitStatus> {
+    std::fs::create_dir_all(dir)?;
+    let init = git(dir).args(["init", "--quiet"]).status()?;
+    if !init.success() {
+        return Ok(init);
+    }
+    // The remote has to exist before anything can be fetched from it, and `git init`
+    // alone does not add one.
+    let remote = git(dir).args(["remote", "add", "origin", url]).status()?;
+    if !remote.success() {
+        return Ok(remote);
+    }
+    let fetch = git(dir)
+        .args(["fetch", "--depth", "1", "origin", object_id])
+        .status()?;
+    if !fetch.success() {
+        return Ok(fetch);
+    }
+    git(dir)
+        .args(["checkout", "--quiet", "FETCH_HEAD"])
+        .status()
 }
 
 /// Bring an existing checkout to the reference it was taken at.
@@ -540,6 +620,26 @@ mod tests {
         let r = parsed("gh:steetstyle/unicpeak@main:Agency.API/Endpoints");
         assert_eq!(r.reference.as_deref(), Some("main"));
         assert_eq!(r.subpath.as_deref(), Some("Agency.API/Endpoints"));
+    }
+
+    #[test]
+    fn a_subdirectory_without_a_reference_is_the_default_branch() {
+        // What a code search result looks like: a file, and no branch, because GitHub's
+        // code search payload does not carry one.
+        let r = parsed("gh:o/r:src/a/Foo.cs");
+        assert_eq!((r.owner.as_str(), r.repo.as_str()), ("o", "r"));
+        assert_eq!(r.reference, None);
+        assert_eq!(r.subpath.as_deref(), Some("src/a/Foo.cs"));
+    }
+
+    #[test]
+    fn a_reference_and_a_subdirectory_still_split_on_the_right_colon() {
+        // The two forms must not be confused: with an '@' present the first ':' after it
+        // ends the reference, not the repository.
+        let r = parsed("gh:o/r@main:src/Foo.cs");
+        assert_eq!(r.repo, "r");
+        assert_eq!(r.reference.as_deref(), Some("main"));
+        assert_eq!(r.subpath.as_deref(), Some("src/Foo.cs"));
     }
 
     #[test]

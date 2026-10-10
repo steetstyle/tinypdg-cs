@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+
+      - name: fmt
+        run: cargo fmt --all --check
+
+      - name: clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: test
+        run: cargo test --features mcp-http
+
+  # `default = []` advertises a build without the MCP server, so that build has to
+  # work. It stopped working by accident once: a helper was inserted between a
+  # `#[cfg(feature = "mcp")]` and the function it gated, so the attribute landed on
+  # the helper and two definitions of `serve` compiled at once -- but only without
+  # the feature, which is the configuration no one builds on purpose and nothing
+  # checked.
+  no-mcp:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: build without the mcp feature
+        run: cargo build --release
+
+      - name: test without the mcp feature
+        run: cargo test
+
+  # `search` needs a GitHub token and the network. Run on a schedule and on demand
+  # rather than on every push: it is slow, it is rate limited, and a red build here
+  # says something about the network rather than about the code.
+  github:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: a public repository resolves without a token
+        run: cargo run --release -- detect gh:steetstyle/tinylink@main
+
+      - name: a commit resolves to exactly that commit
+        run: |
+          set -eu
+          SHA=$(git ls-remote https://github.com/steetstyle/tinylink main | cut -f1)
+          cargo run --release -- detect "gh:steetstyle/tinylink@$SHA"

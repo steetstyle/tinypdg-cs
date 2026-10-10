@@ -30,6 +30,11 @@ axum = { version = "0.8", optional = true }
 # rmcp 3.5) — pinning 0.8 here makes the derive produce a different crate's
 # trait and the tool bounds never resolve.
 schemars = { version = "1", optional = true }
+# GitHub search. Blocking rather than async because every tool in this crate is a
+# plain `fn` -- the MCP handlers are synchronous, so an async client would mean
+# plumbing tokio through a crate that only needs it under a feature flag.
+# rustls rather than native-tls so a build does not need OpenSSL headers present.
+ureq = { version = "3", default-features = false, features = ["json", "rustls", "gzip"] }
 
 [features]
 default = []

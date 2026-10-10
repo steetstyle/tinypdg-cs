@@ -2047,3 +2047,44 @@ public class Endpoint
         std::fs::remove_dir_all(&dir).ok();
     }
 }
+
+// ───────────────────────── search_github ─────────────────────────
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct SearchArgs {
+    /// A repository name, a topic, or code to find.
+    pub query: String,
+    /// `repositories` (default) to find projects, or `code` to find files inside them.
+    ///
+    /// Code search needs a token; repository search does not.
+    #[serde(default)]
+    pub kind: Option<String>,
+    /// Keep a code search inside one repository, as `owner/name`.
+    #[serde(default)]
+    pub repository: Option<String>,
+    /// How many results to return, 1 to 100.
+    #[serde(default)]
+    pub limit: Option<usize>,
+}
+
+/// Find code on GitHub. Results come back as `path` arguments the other tools accept.
+pub fn search_github(args: SearchArgs) -> Result<Value, String> {
+    use crate::github::{self, SearchKind};
+
+    let kind = match args.kind.as_deref() {
+        None | Some("") => SearchKind::Repositories,
+        Some(raw) => SearchKind::parse_public(raw).map_err(|e| e.to_string())?,
+    };
+
+    let results = github::search(
+        &args.query,
+        kind,
+        args.limit.unwrap_or(10),
+        args.repository.as_deref(),
+    )
+    .map_err(|e| e.to_string())?;
+
+    let mut value = serde_json::to_value(&results).map_err(|e| e.to_string())?;
+    value["how_to_use"] = json!(github::HOW_TO_USE);
+    Ok(value)
+}

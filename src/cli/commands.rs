@@ -5,7 +5,6 @@ use std::path::Path;
 use anyhow::Result;
 
 use crate::analysis::callgraph::{CallGraph, CallGraphBuilder, CallSite};
-use crate::resolve::types::TypeGraph;
 use crate::cfg::builder::build_cfg;
 use crate::cfg::builder::BlockKind;
 use crate::detect::behavioral::detect_behavioral;
@@ -17,6 +16,7 @@ use crate::hammock::builder::find_hammocks;
 use crate::parse::parser::parse_source;
 use crate::pdg::pdg_builder::build_pdg;
 use crate::resolve::symbols::SymbolTable;
+use crate::resolve::types::TypeGraph;
 use crate::route::RouteEntry;
 
 pub fn handle_parse(file: &str) -> Result<()> {
@@ -39,8 +39,10 @@ pub fn handle_cfg(file: &str, format: Option<&str>) -> Result<()> {
             println!("digraph CFG {{");
             for node in cfg.node_indices() {
                 let block = &cfg[node];
-                println!("  n{} [label=\"[{}] {:?} (L{}-L{})\"];",
-                    block.id, block.id, block.kind, block.start_line, block.end_line);
+                println!(
+                    "  n{} [label=\"[{}] {:?} (L{}-L{})\"];",
+                    block.id, block.id, block.kind, block.start_line, block.end_line
+                );
             }
             for edge in cfg.raw_edges() {
                 let from = cfg[edge.source()].id;
@@ -70,12 +72,18 @@ pub fn handle_cfg(file: &str, format: Option<&str>) -> Result<()> {
                     "kind": format!("{:?}", edge.weight),
                 }));
             }
-            println!("{}", serde_json::to_string_pretty(&serde_json::json!({
-                "nodes": nodes,
-                "edges": edges,
-            }))?);
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "nodes": nodes,
+                    "edges": edges,
+                }))?
+            );
         }
-        _ => anyhow::bail!("Unsupported format: {}. Use 'dot' or 'json'.", format.unwrap()),
+        _ => anyhow::bail!(
+            "Unsupported format: {}. Use 'dot' or 'json'.",
+            format.unwrap()
+        ),
     }
     Ok(())
 }
@@ -90,8 +98,10 @@ pub fn handle_pdg(file: &str, format: Option<&str>) -> Result<()> {
             println!("digraph PDG {{");
             for node in pdg.node_indices() {
                 let block = &pdg[node];
-                println!("  n{} [label=\"[{}] {:?} (L{}-L{})\"];",
-                    block.id, block.id, block.kind, block.start_line, block.end_line);
+                println!(
+                    "  n{} [label=\"[{}] {:?} (L{}-L{})\"];",
+                    block.id, block.id, block.kind, block.start_line, block.end_line
+                );
             }
             for edge in pdg.raw_edges() {
                 let from = pdg[edge.source()].id;
@@ -121,12 +131,18 @@ pub fn handle_pdg(file: &str, format: Option<&str>) -> Result<()> {
                     "kind": format!("{}", edge.weight),
                 }));
             }
-            println!("{}", serde_json::to_string_pretty(&serde_json::json!({
-                "nodes": nodes,
-                "edges": edges,
-            }))?);
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "nodes": nodes,
+                    "edges": edges,
+                }))?
+            );
         }
-        _ => anyhow::bail!("Unsupported format: {}. Use 'dot' or 'json'.", format.unwrap()),
+        _ => anyhow::bail!(
+            "Unsupported format: {}. Use 'dot' or 'json'.",
+            format.unwrap()
+        ),
     }
     Ok(())
 }
@@ -135,7 +151,9 @@ pub fn handle_hammock(file: &str, _level: Option<&str>) -> Result<()> {
     let source = fs::read_to_string(file)?;
     let cfg = build_cfg(&source)?;
 
-    let entry = cfg.node_indices().find(|i| cfg[*i].kind == BlockKind::Entry);
+    let entry = cfg
+        .node_indices()
+        .find(|i| cfg[*i].kind == BlockKind::Entry);
     let exit = cfg.node_indices().find(|i| cfg[*i].kind == BlockKind::Exit);
 
     match (entry, exit) {
@@ -148,8 +166,15 @@ pub fn handle_hammock(file: &str, _level: Option<&str>) -> Result<()> {
                 for (i, h) in hammocks.iter().enumerate() {
                     let header = &cfg[h.header];
                     let footer = &cfg[h.footer];
-                    println!("  Hammock {}: header=[{}] {:?} body={} nodes footer=[{}] {:?}",
-                        i + 1, header.id, header.kind, h.body.len(), footer.id, footer.kind);
+                    println!(
+                        "  Hammock {}: header=[{}] {:?} body={} nodes footer=[{}] {:?}",
+                        i + 1,
+                        header.id,
+                        header.kind,
+                        h.body.len(),
+                        footer.id,
+                        footer.kind
+                    );
                 }
             }
         }
@@ -215,7 +240,11 @@ pub fn handle_resolve(path: &str, kind: Option<&str>) -> Result<()> {
     match kind.unwrap_or("all") {
         "di" | "factory" | "reflection" | "cha" | "all" => {
             println!("Resolution analysis for {} file(s):", all_cs_files.len());
-            println!("  Classes: {}, Interfaces: {}", tg.classes.len(), tg.interfaces.len());
+            println!(
+                "  Classes: {}, Interfaces: {}",
+                tg.classes.len(),
+                tg.interfaces.len()
+            );
             println!("  Call sites: {}", cg.calls.len());
             println!();
             if !cg.calls.is_empty() {
@@ -231,7 +260,10 @@ pub fn handle_resolve(path: &str, kind: Option<&str>) -> Result<()> {
                 }
             }
         }
-        _ => anyhow::bail!("Unsupported resolution kind: {}. Use di, factory, reflection, cha, or all.", kind.unwrap()),
+        _ => anyhow::bail!(
+            "Unsupported resolution kind: {}. Use di, factory, reflection, cha, or all.",
+            kind.unwrap()
+        ),
     }
     Ok(())
 }
@@ -297,8 +329,12 @@ pub fn handle_detect(path: &str) -> Result<()> {
     detections.extend(detect_dotnet(&ctx));
 
     println!("Analysis of {} file(s):", all_cs_files.len());
-    println!("  Classes: {}, Interfaces: {}, Call sites: {}",
-        tg.classes.len(), tg.interfaces.len(), cg.calls.len());
+    println!(
+        "  Classes: {}, Interfaces: {}, Call sites: {}",
+        tg.classes.len(),
+        tg.interfaces.len(),
+        cg.calls.len()
+    );
     println!();
 
     if detections.is_empty() {
@@ -333,8 +369,16 @@ pub fn handle_route(path: &str, json: bool) -> Result<()> {
         return Ok(());
     }
 
-    let controllers: Vec<&RouteEntry> = table.routes.iter().filter(|r| r.source == "Controller").collect();
-    let minimal: Vec<&RouteEntry> = table.routes.iter().filter(|r| r.source == "MinimalApi").collect();
+    let controllers: Vec<&RouteEntry> = table
+        .routes
+        .iter()
+        .filter(|r| r.source == "Controller")
+        .collect();
+    let minimal: Vec<&RouteEntry> = table
+        .routes
+        .iter()
+        .filter(|r| r.source == "MinimalApi")
+        .collect();
 
     println!("Found {} route(s)", table.routes.len());
     println!("{}", "═".repeat(70));
@@ -343,12 +387,18 @@ pub fn handle_route(path: &str, json: bool) -> Result<()> {
 
     if !controllers.is_empty() {
         println!("\n── Controller routes ──\n");
-        let mut by_class: std::collections::BTreeMap<&str, Vec<&&RouteEntry>> = std::collections::BTreeMap::new();
+        let mut by_class: std::collections::BTreeMap<&str, Vec<&&RouteEntry>> =
+            std::collections::BTreeMap::new();
         for r in &controllers {
             by_class.entry(r.class.as_str()).or_default().push(r);
         }
         for (class, routes) in &by_class {
-            println!("  {} ({} route{}):", class, routes.len(), if routes.len() == 1 { "" } else { "s" });
+            println!(
+                "  {} ({} route{}):",
+                class,
+                routes.len(),
+                if routes.len() == 1 { "" } else { "s" }
+            );
             for r in routes {
                 println!("    {:>6}  {:<30}  {}", r.http_method, r.path, r.handler);
             }
@@ -358,15 +408,25 @@ pub fn handle_route(path: &str, json: bool) -> Result<()> {
 
     if !minimal.is_empty() {
         println!("── Minimal API routes ──\n");
-        let mut by_class: std::collections::BTreeMap<&str, Vec<&&RouteEntry>> = std::collections::BTreeMap::new();
+        let mut by_class: std::collections::BTreeMap<&str, Vec<&&RouteEntry>> =
+            std::collections::BTreeMap::new();
         for r in &minimal {
             by_class.entry(r.class.as_str()).or_default().push(r);
         }
         for (class, routes) in &by_class {
             if class.is_empty() {
-                println!("  (top-level) ({} route{}):", routes.len(), if routes.len() == 1 { "" } else { "s" });
+                println!(
+                    "  (top-level) ({} route{}):",
+                    routes.len(),
+                    if routes.len() == 1 { "" } else { "s" }
+                );
             } else {
-                println!("  {} ({} route{}):", class, routes.len(), if routes.len() == 1 { "" } else { "s" });
+                println!(
+                    "  {} ({} route{}):",
+                    class,
+                    routes.len(),
+                    if routes.len() == 1 { "" } else { "s" }
+                );
             }
             for r in routes {
                 println!("    {:>6}  {:<30}  {}", r.http_method, r.path, r.handler);
@@ -386,7 +446,13 @@ pub fn handle_traverse(path_str: &str, class: &str, context: Option<&str>) -> Re
 
     let (tg, cg) = load_project(path)?;
 
-    let mut state = match crate::traverse::types::TraversalState::init(&tg, &cg, class, context.map(|s| s.to_string()), Some(path_str)) {
+    let mut state = match crate::traverse::types::TraversalState::init(
+        &tg,
+        &cg,
+        class,
+        context.map(|s| s.to_string()),
+        Some(path_str),
+    ) {
         Ok(s) => s,
         Err(e) => anyhow::bail!("{}", e),
     };
@@ -395,7 +461,14 @@ pub fn handle_traverse(path_str: &str, class: &str, context: Option<&str>) -> Re
     Ok(())
 }
 
-pub fn handle_callgraph(path: &str, class: Option<&str>, depth: usize, only_outbound: bool, only_inbound: bool, trace: bool) -> Result<()> {
+pub fn handle_callgraph(
+    path: &str,
+    class: Option<&str>,
+    depth: usize,
+    only_outbound: bool,
+    only_inbound: bool,
+    trace: bool,
+) -> Result<()> {
     let path = Path::new(path);
     if !path.exists() {
         anyhow::bail!("Path does not exist: {}", path.display());
@@ -448,13 +521,19 @@ pub fn handle_callgraph(path: &str, class: Option<&str>, depth: usize, only_outb
 
     let tg = type_graph.unwrap_or_default();
     println!("Parsed {} file(s)", all_cs_files.len());
-    println!("Classes: {}, Interfaces: {}, Call sites: {}",
-        tg.classes.len(), tg.interfaces.len(), cg.calls.len());
+    println!(
+        "Classes: {}, Interfaces: {}, Call sites: {}",
+        tg.classes.len(),
+        tg.interfaces.len(),
+        cg.calls.len()
+    );
     println!();
 
     match class {
         Some(class_name) => {
-            let matching: Vec<String> = tg.classes.keys()
+            let matching: Vec<String> = tg
+                .classes
+                .keys()
                 .filter(|k| k.to_lowercase().contains(&class_name.to_lowercase()))
                 .cloned()
                 .collect();
@@ -476,8 +555,18 @@ pub fn handle_callgraph(path: &str, class: Option<&str>, depth: usize, only_outb
 
                 if !only_inbound {
                     println!("\n── Outbound calls (what {} calls) ──", cn);
-                    let mut class_methods: Vec<String> = tg.classes.get(cn.as_str())
-                        .map(|c| c.methods.iter().filter(|m| !m.method.starts_with("get_") && !m.method.starts_with("set_")).map(|m| m.method.clone()).collect())
+                    let mut class_methods: Vec<String> = tg
+                        .classes
+                        .get(cn.as_str())
+                        .map(|c| {
+                            c.methods
+                                .iter()
+                                .filter(|m| {
+                                    !m.method.starts_with("get_") && !m.method.starts_with("set_")
+                                })
+                                .map(|m| m.method.clone())
+                                .collect()
+                        })
                         .unwrap_or_default();
                     class_methods.sort();
                     class_methods.dedup();
@@ -485,14 +574,26 @@ pub fn handle_callgraph(path: &str, class: Option<&str>, depth: usize, only_outb
                         println!("  (none)");
                     } else {
                         for method in &class_methods {
-                            let calls_from: Vec<_> = cg.calls.iter()
+                            let calls_from: Vec<_> = cg
+                                .calls
+                                .iter()
                                 .filter(|c| c.caller_class == *cn && c.caller_method == *method)
                                 .collect();
-                            if calls_from.is_empty() { continue; }
+                            if calls_from.is_empty() {
+                                continue;
+                            }
                             let trace_depth = if trace { depth } else { 1 };
                             if trace_depth >= 1 {
                                 println!("  {}() calls:", method);
-                                print_call_tree(&tg, &cg, cn, method, &mut HashSet::new(), "    ", trace_depth);
+                                print_call_tree(
+                                    &tg,
+                                    &cg,
+                                    cn,
+                                    method,
+                                    &mut HashSet::new(),
+                                    "    ",
+                                    trace_depth,
+                                );
                             }
                         }
                     }
@@ -500,15 +601,26 @@ pub fn handle_callgraph(path: &str, class: Option<&str>, depth: usize, only_outb
 
                 if !only_outbound {
                     println!("\n── Inbound calls (what calls {}) ──", cn);
-                    let mut class_methods: Vec<String> = tg.classes.get(cn.as_str())
-                        .map(|c| c.methods.iter().filter(|m| !m.method.starts_with("get_") && !m.method.starts_with("set_")).map(|m| m.method.clone()).collect())
+                    let mut class_methods: Vec<String> = tg
+                        .classes
+                        .get(cn.as_str())
+                        .map(|c| {
+                            c.methods
+                                .iter()
+                                .filter(|m| {
+                                    !m.method.starts_with("get_") && !m.method.starts_with("set_")
+                                })
+                                .map(|m| m.method.clone())
+                                .collect()
+                        })
                         .unwrap_or_default();
                     class_methods.sort();
                     class_methods.dedup();
 
                     let all_callees_of_class: Vec<&str> = if class_methods.is_empty() {
                         // Try matching class name as callee
-                        cg.calls.iter()
+                        cg.calls
+                            .iter()
                             .filter(|c| c.callee == *cn)
                             .map(|c| c.callee.as_str())
                             .collect()
@@ -528,21 +640,36 @@ pub fn handle_callgraph(path: &str, class: Option<&str>, depth: usize, only_outb
                         println!("  (none)");
                     } else {
                         for method_name in &class_methods {
-                            let calls: Vec<_> = cg.calls.iter()
+                            let calls: Vec<_> = cg
+                                .calls
+                                .iter()
                                 .filter(|c| c.callee == *method_name)
                                 .collect();
-                            if calls.is_empty() { continue; }
+                            if calls.is_empty() {
+                                continue;
+                            }
                             println!("  {}() <-", method_name);
                             let mut by_caller: HashMap<String, Vec<String>> = HashMap::new();
                             for c in &calls {
-                                let via = if c.target_expr.is_empty() { "direct".to_string() } else { c.target_expr.clone() };
-                                by_caller.entry(c.caller_class.clone()).or_default().push(via);
+                                let via = if c.target_expr.is_empty() {
+                                    "direct".to_string()
+                                } else {
+                                    c.target_expr.clone()
+                                };
+                                by_caller
+                                    .entry(c.caller_class.clone())
+                                    .or_default()
+                                    .push(via);
                             }
                             let mut callers: Vec<String> = by_caller.keys().cloned().collect();
                             callers.sort();
                             for caller in &callers {
                                 let vias = by_caller.get(caller).cloned().unwrap_or_default();
-                                let via_str = if vias.len() == 1 { format!(" via {}", vias[0]) } else { String::new() };
+                                let via_str = if vias.len() == 1 {
+                                    format!(" via {}", vias[0])
+                                } else {
+                                    String::new()
+                                };
                                 println!("    └── {} ({}x{})", caller, vias.len(), via_str);
                             }
                         }
@@ -557,14 +684,19 @@ pub fn handle_callgraph(path: &str, class: Option<&str>, depth: usize, only_outb
 
             let mut by_caller: HashMap<String, Vec<String>> = HashMap::new();
             for call in &cg.calls {
-                by_caller.entry(call.caller_class.clone()).or_default().push(call.callee.clone());
+                by_caller
+                    .entry(call.caller_class.clone())
+                    .or_default()
+                    .push(call.callee.clone());
             }
             let mut caller_classes: Vec<String> = by_caller.keys().cloned().collect();
             caller_classes.sort();
             for caller in &caller_classes {
                 let callees = by_caller.get(caller).cloned().unwrap_or_default();
                 let mut counts: HashMap<String, usize> = HashMap::new();
-                for c in &callees { *counts.entry(c.clone()).or_default() += 1; }
+                for c in &callees {
+                    *counts.entry(c.clone()).or_default() += 1;
+                }
                 let mut sorted: Vec<_> = counts.into_iter().collect();
                 sorted.sort_by(|a, b| b.1.cmp(&a.1));
                 println!("  {} ({} calls):", caller, callees.len());
@@ -598,7 +730,9 @@ fn print_call_tree(
     prefix: &str,
     depth: usize,
 ) {
-    if depth == 0 { return; }
+    if depth == 0 {
+        return;
+    }
 
     let key = (class.to_string(), method.to_string());
     if !visited.insert(key.clone()) {
@@ -606,7 +740,9 @@ fn print_call_tree(
         return;
     }
 
-    let calls: Vec<_> = cg.calls.iter()
+    let calls: Vec<_> = cg
+        .calls
+        .iter()
         .filter(|c| c.caller_class == class && c.caller_method == method)
         .collect();
 
@@ -628,7 +764,11 @@ fn print_call_tree(
         let sites = &by_callee[callee];
         let count = sites.len();
         let first = sites[0];
-        let via = if first.target_expr.is_empty() { String::new() } else { format!(" via {}", first.target_expr) };
+        let via = if first.target_expr.is_empty() {
+            String::new()
+        } else {
+            format!(" via {}", first.target_expr)
+        };
 
         let is_last = i == total - 1;
         let connector = if is_last { "└──" } else { "├──" };
@@ -636,30 +776,59 @@ fn print_call_tree(
 
         println!("{}{} {}{} ({}x)", prefix, connector, callee, via, count);
 
-        let dispatch_ifaces: Vec<(String, Vec<String>)> = tg.interfaces.iter()
+        let dispatch_ifaces: Vec<(String, Vec<String>)> = tg
+            .interfaces
+            .iter()
             .filter(|(_, iface)| iface.methods.iter().any(|m| m.method == callee.as_str()))
             .filter_map(|(name, _)| {
-                let impls: Vec<String> = tg.concrete_subclasses(name)
-                    .iter().map(|c| c.name.clone()).collect();
-                if impls.is_empty() { None } else { Some((name.clone(), impls)) }
+                let impls: Vec<String> = tg
+                    .concrete_subclasses(name)
+                    .iter()
+                    .map(|c| c.name.clone())
+                    .collect();
+                if impls.is_empty() {
+                    None
+                } else {
+                    Some((name.clone(), impls))
+                }
             })
             .collect();
 
         if !dispatch_ifaces.is_empty() {
             for (iface_name, implementors) in &dispatch_ifaces {
-                println!("{}══ DISPATCH: {} → {} ══", next_prefix, first.target_expr, iface_name);
+                println!(
+                    "{}══ DISPATCH: {} → {} ══",
+                    next_prefix, first.target_expr, iface_name
+                );
                 for impl_class in implementors {
                     println!("{}── {} ──", next_prefix, impl_class);
-                    print_call_tree(tg, cg, impl_class, callee,
-                                  &mut HashSet::new(),
-                                  &format!("{}  ", next_prefix), depth - 1);
+                    print_call_tree(
+                        tg,
+                        cg,
+                        impl_class,
+                        callee,
+                        &mut HashSet::new(),
+                        &format!("{}  ", next_prefix),
+                        depth - 1,
+                    );
                 }
             }
         } else {
             if let Some(resolved_class) = resolve_callee_class(callee, &first.target_expr, tg) {
-                let mut branch_visited = if resolved_class == class { visited.clone() } else { HashSet::new() };
-                print_call_tree(tg, cg, &resolved_class, callee, &mut branch_visited,
-                              &next_prefix, depth - 1);
+                let mut branch_visited = if resolved_class == class {
+                    visited.clone()
+                } else {
+                    HashSet::new()
+                };
+                print_call_tree(
+                    tg,
+                    cg,
+                    &resolved_class,
+                    callee,
+                    &mut branch_visited,
+                    &next_prefix,
+                    depth - 1,
+                );
             }
         }
     }
@@ -680,9 +849,14 @@ pub fn handle_diffimpact(v1: &str, v2: &str, class: &str, method: &str) -> Resul
     let result = crate::analysis::diffimpact::build_diff_impact(v1_path, v2_path, class, method)?;
     let change_count = result.changes.len();
     let impacted = result.impact.target_callers();
-    let title = format!("Diff-impact: {} vs {}\n{} method(s) changed, {} places affected in v2",
-        v1, v2, change_count, impacted);
-    print!("{}", crate::analysis::diffimpact::diff_impact_to_dot(&result, &title));
+    let title = format!(
+        "Diff-impact: {} vs {}\n{} method(s) changed, {} places affected in v2",
+        v1, v2, change_count, impacted
+    );
+    print!(
+        "{}",
+        crate::analysis::diffimpact::diff_impact_to_dot(&result, &title)
+    );
     Ok(())
 }
 
@@ -692,8 +866,12 @@ pub fn handle_impact(path: &str, class: &str, method: &str) -> Result<()> {
         anyhow::bail!("Path does not exist: {}", path.display());
     }
     let (ig, _tg, _cg) = crate::analysis::impact::build_impact_graph(path, class, method)?;
-    let title = format!("Impact analysis for {}.{}\nTotal transitive callers: {}",
-        class, method, ig.target_callers());
+    let title = format!(
+        "Impact analysis for {}.{}\nTotal transitive callers: {}",
+        class,
+        method,
+        ig.target_callers()
+    );
     print!("{}", crate::analysis::impact::impact_to_dot(&ig, &title));
     Ok(())
 }
@@ -741,7 +919,9 @@ pub fn load_project(path: &Path) -> Result<(TypeGraph, CallGraph)> {
             if let Some(existing) = type_graph.classes.get_mut(&name) {
                 existing.methods.extend(info.methods);
                 existing.fields.extend(info.fields);
-                if info.base_class.is_some() { existing.base_class = info.base_class; }
+                if info.base_class.is_some() {
+                    existing.base_class = info.base_class;
+                }
                 existing.interfaces.extend(info.interfaces);
             } else {
                 type_graph.classes.insert(name, info);
@@ -784,4 +964,77 @@ pub fn load_project(path: &Path) -> Result<(TypeGraph, CallGraph)> {
     );
 
     Ok((type_graph, cg))
+}
+
+// ───────────────────────── search ─────────────────────────
+
+/// Search GitHub, and print results that can be analysed directly.
+///
+/// The output is the point: each row is a `gh:` specifier, which is the same source
+/// argument every other command takes. So the answer to "now what" is a copy and
+/// paste rather than another tool call.
+pub fn handle_search(
+    query: &str,
+    kind: Option<&str>,
+    repository: Option<&str>,
+    limit: usize,
+    as_json: bool,
+) -> Result<()> {
+    use crate::github::{self, SearchKind};
+
+    let kind = match kind {
+        None => SearchKind::Repositories,
+        Some(raw) => SearchKind::parse_public(raw).map_err(anyhow::Error::msg)?,
+    };
+
+    let results = github::search(query, kind, limit, repository).map_err(anyhow::Error::msg)?;
+
+    if as_json {
+        println!("{}", serde_json::to_string_pretty(&results)?);
+        return Ok(());
+    }
+
+    let identity = &results.identity;
+    match (&identity.login, identity.private_results_possible) {
+        (Some(login), true) => eprintln!("Searched as {login}; private repositories are in scope."),
+        (Some(login), false) => eprintln!("Searched as {login}."),
+        (None, _) => eprintln!(
+            "No token: public repositories only. Set GITHUB_TOKEN to include private \
+             ones, and to search code at all."
+        ),
+    }
+    if let Some(scopes) = &identity.scopes {
+        eprintln!("Token scopes: {scopes}");
+    }
+
+    if results.results.is_empty() {
+        eprintln!("No matches for `{}`.", results.query);
+        return Ok(());
+    }
+
+    for result in &results.results {
+        match &result.path {
+            None => println!(
+                "{:<48} {}★  {}",
+                result.specifier,
+                result.stars.unwrap_or(0),
+                result.description.as_deref().unwrap_or("")
+            ),
+            Some(path) => println!(
+                "{:<52} {}\n{:<52}   whole project: {}",
+                result.specifier,
+                path,
+                "",
+                result.project.as_deref().unwrap_or("")
+            ),
+        }
+    }
+
+    eprintln!(
+        "\n{} of {} match. Any specifier above is a source argument:\n  {}",
+        results.results.len(),
+        results.total_count,
+        github::HOW_TO_USE
+    );
+    Ok(())
 }

@@ -178,6 +178,24 @@ impl AnalysisServer {
     ) -> Result<String, McpError> {
         wrap(tools::method_callees(args.0))
     }
+
+    /// Search GitHub for repositories or code.
+    #[tool(
+        name = "search_github",
+        description = "Find code on GitHub and get back results you can analyse immediately. `kind` is `repositories` to find projects, or `code` to find files inside them -- code search needs GITHUB_TOKEN and covers the private repositories the token can see as well as the public ones; repository search works without a token. Pass `repository` as owner/name to keep a code search inside one project.\n\nEvery result carries a `specifier`, and a specifier is a `path` argument: pass it to method_pdg, method_hammocks, find_callers, find_patterns, list_routes or diff_impact unchanged. Nothing is needed between finding something and analysing it.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = true
+        )
+    )]
+    pub async fn search_github(
+        &self,
+        args: Parameters<tools::SearchArgs>,
+    ) -> Result<String, McpError> {
+        wrap(tools::search_github(args.0))
+    }
 }
 
 #[tool_handler(router = self.tool_router)]
@@ -190,7 +208,13 @@ impl ServerHandler for AnalysisServer {
             "Static analysis of C# code: classes, HTTP routes, call graphs, program \
              dependence graphs and design-pattern detection. All tools are read-only \
              and need no runtime data. Start with project_summary to learn the actual \
-             class and method names, then use list_routes or find_callers to navigate."
+             class and method names, then use list_routes or find_callers to navigate.\n\
+             \
+             A `path` may be a directory or a repository reference: gh:owner/repo, \
+             gh:owner/repo@branch, gh:owner/repo@40-hex-commit, or gh:owner/repo@ref:sub/dir \
+             for a subdirectory. search_github returns results already in that form, so \
+             finding code and analysing it takes no step in between. Repositories are \
+             fetched once and cached."
                 .into(),
         );
         info.capabilities = ServerCapabilities::builder().enable_tools().build();
@@ -228,13 +252,14 @@ mod tests {
             "diff_impact",
             "method_callees",
             "method_hammocks",
+            "search_github",
         ] {
             assert!(
                 names.contains(&expected.to_string()),
                 "missing {expected}: {names:?}"
             );
         }
-        assert_eq!(names.len(), 8, "unexpected tool set: {names:?}");
+        assert_eq!(names.len(), 9, "unexpected tool set: {names:?}");
     }
 
     #[test]
