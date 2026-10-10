@@ -723,21 +723,26 @@ pub struct DiffImpactArgs {
 /// The incident-time question is almost always "what did we deploy", and the
 /// signal that carries it is a method losing a caller.
 pub fn diff_impact(args: DiffImpactArgs) -> Result<Value, String> {
-    use crate::analysis::diffimpact::{compute_changes, merge_impact_graphs};
-    use crate::analysis::impact::build_impact_from;
+    // Resolved first, then checked. The order matters in both directions: a `gh:`
+    // specifier is not a path, so checking the raw argument rejects every repository
+    // reference with "does not exist", which is true and useless; and dropping the check
+    // entirely lets a typo'd directory through as "0 methods changed".
+    let dir_v1 = source_dir(&args.path_v1, "diff_impact")?;
+    let dir_v2 = source_dir(&args.path_v2, "diff_impact")?;
 
-    for path in [&args.path_v1, &args.path_v2] {
-        if !std::path::Path::new(path).exists() {
-            return Err(format!("path does not exist: {path}"));
+    for (dir, given) in [(&dir_v1, &args.path_v1), (&dir_v2, &args.path_v2)] {
+        if !dir.is_dir() {
+            return Err(format!("path does not exist: {given}"));
         }
     }
 
+    use crate::analysis::diffimpact::{compute_changes, merge_impact_graphs};
+    use crate::analysis::impact::build_impact_from;
+
     // Parse each version exactly once. build_diff_impact would parse v2 a second
     // time inside build_impact_graph, and tracing N changed methods through it
-    // would parse N+1 times — on a 1667-file solution that is seconds per call.
+    // would parse N+1 times -- on a 1667-file solution that is seconds per call.
     // v1's type graph is not needed: the comparison only uses call edges.
-    let dir_v1 = source_dir(&args.path_v1, "diff_impact")?;
-    let dir_v2 = source_dir(&args.path_v2, "diff_impact")?;
     let (_, cg1) = crate::cli::commands::load_project(&dir_v1)
         .map_err(|e| format!("failed to load {}: {e:#}", args.path_v1))?;
     let (tg2, cg2) = crate::cli::commands::load_project(&dir_v2)
