@@ -510,19 +510,38 @@ fn handle_context(
         let sources = anchor.sources.join("+");
         println!("  {}. {}  [{}]", i + 1, anchor.symbol_id, sources);
         println!(
-            "     {}:{}{}",
+            "     {}:{}{}{}",
             anchor.file,
             anchor.line,
             anchor
                 .similarity
                 .map(|s| format!("  {s:.3}"))
-                .unwrap_or_default()
+                .unwrap_or_default(),
+            // Printed on its own line rather than appended to the path, because it is
+            // not a location. It is where this symbol came from, and the whole point of
+            // showing an expanded symbol is that the reader can follow it back.
+            anchor
+                .via
+                .as_ref()
+                .map(|v| format!("\n     reached from {v}"))
+                .unwrap_or_default(),
         );
     }
     println!(
         "  confidence: {} -- {}",
         ctx.coverage.confidence, ctx.coverage.note
     );
+    if ctx.coverage.edges == 0 {
+        println!(
+            "  expanded: none -- this store holds no graph. Re-run `tiny-pdg-cs embed` to \
+             write one."
+        );
+    } else if ctx.coverage.expanded > 0 {
+        println!(
+            "  expanded: {} reached from the top {} anchor(s), over {} edge(s)",
+            ctx.coverage.expanded, 3, ctx.coverage.edges
+        );
+    }
     Ok(())
 }
 

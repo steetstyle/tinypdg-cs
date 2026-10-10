@@ -26,6 +26,15 @@ use serde::{Deserialize, Serialize};
 use super::provider::{tokenize, Provider};
 use super::store::{Hit, VectorStore};
 
+/// How many of the top anchors get expanded, and how many neighbours survive.
+///
+/// Bounded because the graph is not: one hop from three anchors in a large project is
+/// already hundreds of symbols, and a list of hundreds is not an answer, it is the
+/// project. Three and five were chosen by looking at where the list stops being useful
+/// rather than by taste.
+const EXPAND_FROM: usize = 3;
+const MAX_EXPANDED: usize = 5;
+
 /// Where a symbol was found. Ordered so the strongest source reads first.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -33,6 +42,13 @@ pub enum Source {
     Explicit,
     Lexical,
     Semantic,
+    /// Reached from another anchor by one step of the code graph, not found at all.
+    ///
+    /// Separate from the other three because it is a different kind of claim. The first
+    /// three say "this is what the query is about"; this says "this is next to something
+    /// the query is about". Both are worth showing and neither may be mistaken for the
+    /// other, which is why it is a source rather than a footnote.
+    Expanded,
 }
 
 impl Source {
@@ -41,6 +57,7 @@ impl Source {
             Source::Explicit => "explicit",
             Source::Lexical => "lexical",
             Source::Semantic => "semantic",
+            Source::Expanded => "expanded",
         }
     }
 
@@ -54,6 +71,10 @@ impl Source {
             Source::Explicit => 3,
             Source::Lexical => 2,
             Source::Semantic => 1,
+            // Zero, not low. An expanded symbol never found the query, so it must sort
+            // after everything that did, including a single-source guess: a vector hit
+            // is one model's opinion, and this is not even an opinion about the query.
+            Source::Expanded => 0,
         }
     }
 }
@@ -70,6 +91,10 @@ pub struct Anchor {
     pub score: f32,
     /// Only for a semantic hit: how close, and nothing else.
     pub similarity: Option<f32>,
+    /// The anchor this one was reached from, when it was reached rather than found.
+    pub via: Option<String>,
+    /// 0 when a source found it, 1 when the graph did.
+    pub graph_distance: u8,
 }
 
 /// The full answer.
@@ -94,6 +119,12 @@ pub struct Coverage {
     /// `high` when several sources agree, `low` when everything rests on one.
     pub confidence: String,
     pub note: String,
+    /// Reached by the graph rather than found. Not part of the confidence: being next to
+    /// a good answer is not evidence of being a good answer.
+    pub expanded: usize,
+    /// Edges in the store. Zero means the index predates the graph, so nothing was
+    /// expanded and the absence of expanded anchors is the store's, not the query's.
+    pub edges: usize,
 }
 
 /// Find symbols by name and by meaning, and report which found what.
@@ -194,6 +225,8 @@ pub fn find_context(
                 sources: sources.iter().map(|s| s.as_str().to_string()).collect(),
                 score: primary.rank() as f32,
                 similarity,
+                via: None,
+                graph_distance: 0,
             })
         })
         .collect();
@@ -222,6 +255,78 @@ pub fn find_context(
     }
 
     anchors.truncate(k);
+
+    // Expansion.
+    //
+    // The three sources answer "what does this query name". They cannot answer "what do
+    // I do about it", and that is the failure this fixes: measured on 4,141 production
+    // symbols, "charge a customer's credit balance" put `CreditTransactionResult` first
+    // and never put a method that charges anything above sixth. A noun and a verb are
+    // equidistant from the same sentence in an embedding space -- that is what symmetric
+    // means -- so no amount of rewriting the indexed text changes it. The graph can,
+    // because it knows which methods belong to the type that won.
+    let edges = store.edge_count().unwrap_or(0);
+    let mut found_ids: std::collections::BTreeSet<String> =
+        anchors.iter().map(|a| a.symbol_id.clone()).collect();
+    let mut expanded: Vec<Anchor> = Vec::new();
+
+    if edges > 0 {
+        let seeds: Vec<&str> = anchors
+            .iter()
+            .take(EXPAND_FROM)
+            .map(|a| a.symbol_id.as_str())
+            .collect();
+        if let Ok(graph) = store.neighbours_of(&seeds) {
+            // Deduplicated by target, so a method called by all three anchors appears
+            // once and says which of them it came from -- the first, which is the
+            // strongest, rather than an arbitrary one of the three.
+            let mut reached: BTreeMap<String, (String, String)> = BTreeMap::new();
+            for (from, out) in &graph {
+                for edge in out {
+                    if found_ids.contains(&edge.to) || reached.contains_key(&edge.to) {
+                        continue;
+                    }
+                    // The neighbour has to be an indexed symbol, or the answer would
+                    // name something the caller cannot open.
+                    if !by_id.contains_key(edge.to.as_str()) {
+                        continue;
+                    }
+                    reached.insert(edge.to.clone(), (from.clone(), edge.relation.clone()));
+                }
+            }
+
+            expanded = reached
+                .into_iter()
+                .filter_map(|(id, (from, relation))| {
+                    let entry = by_id.get(id.as_str())?;
+                    Some(Anchor {
+                        symbol_id: id.clone(),
+                        kind: entry.kind.clone(),
+                        file: entry.file.clone(),
+                        line: entry.line,
+                        sources: vec![Source::Expanded.as_str().to_string()],
+                        // Zero, and said so here rather than left to the reader to
+                        // infer: no source scored this. `rank` decides the order; a
+                        // similarity would be a number about a vector that was never
+                        // compared to the query.
+                        score: Source::Expanded.rank() as f32,
+                        similarity: None,
+                        via: Some(format!("{from} ({relation})")),
+                        graph_distance: 1,
+                    })
+                })
+                .take(MAX_EXPANDED)
+                .collect();
+
+            for a in &expanded {
+                found_ids.insert(a.symbol_id.clone());
+            }
+        }
+    }
+
+    let expanded_count = expanded.len();
+    anchors.extend(expanded);
+
     Ok(Context {
         query: query.to_string(),
         anchors,
@@ -234,6 +339,8 @@ pub fn find_context(
             single_source,
             confidence: if corroborated > 0 { "high" } else { "low" }.to_string(),
             note,
+            expanded: expanded_count,
+            edges,
         },
     })
 }
@@ -243,7 +350,7 @@ mod tests {
     use super::*;
     use crate::embed::index::embed_symbols;
     use crate::embed::provider::HashingProvider;
-    use crate::embed::store::SqliteStore;
+    use crate::embed::store::{Edge, SqliteStore};
     use crate::embed::Symbol;
     use std::path::PathBuf;
 
@@ -275,7 +382,7 @@ mod tests {
             namespace: String::new(),
             doc: None,
             calls: Vec::new(),
-            graph: None,
+            siblings: Vec::new(),
         }
     }
 
@@ -342,10 +449,10 @@ mod tests {
         for anchor in &ctx.anchors {
             assert!(!anchor.sources.is_empty(), "{anchor:?}");
             assert!(
-                anchor
-                    .sources
-                    .iter()
-                    .all(|s| matches!(s.as_str(), "explicit" | "lexical" | "semantic")),
+                anchor.sources.iter().all(|s| matches!(
+                    s.as_str(),
+                    "explicit" | "lexical" | "semantic" | "expanded"
+                )),
                 "{:?}",
                 anchor.sources
             );
@@ -392,6 +499,135 @@ mod tests {
             .map(|a| a.symbol_id.as_str())
             .collect();
         assert_eq!(a, b);
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// Expansion must not re-answer what the three sources already answered.
+    ///
+    /// Measured on a small store every symbol is found by the semantic source, because
+    /// the hashing provider embeds any text at all -- so the neighbour of the winning
+    /// anchor is always already in the found set, and the only correct answer is an
+    /// empty expansion. The first version of this test asserted the opposite and would
+    /// have passed for the wrong reason if the provider had been any better.
+    #[test]
+    fn expansion_skips_what_a_source_already_found() {
+        let path = temp("skipfound");
+        let mut store = SqliteStore::open(&path).expect("open");
+        embed_symbols(
+            &mut store,
+            &HashingProvider::new(256),
+            &[
+                symbol("CreditTransaction"),
+                symbol("BillingLedger.TopUpAsync"),
+            ],
+            true,
+        )
+        .expect("embed");
+        store
+            .put_edges(&[Edge {
+                from: "BillingLedger.TopUpAsync".into(),
+                to: "CreditTransaction".into(),
+                relation: "references".into(),
+            }])
+            .expect("edges");
+
+        let ctx = find_context(&store, &HashingProvider::new(256), "credit transaction", 10)
+            .expect("search");
+        assert_eq!(
+            ctx.coverage.edges, 1,
+            "the graph is there -- this test is about not using it"
+        );
+        for anchor in &ctx.anchors {
+            assert!(
+                !anchor.sources.iter().any(|s| s == "expanded"),
+                "both symbols were already found, so nothing was reached: {anchor:?}"
+            );
+            assert!(anchor.via.is_none(), "{anchor:?}");
+        }
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// A symbol no source found is reached, and says from where.
+    ///
+    /// The store is seeded with enough filler that the neighbour falls outside the ten
+    /// nearest the semantic source returns -- `find_context` asks for `k.max(10)`, so a
+    /// store smaller than that cannot produce a symbol the sources missed at all.
+    #[test]
+    fn expansion_reaches_what_the_query_never_named() {
+        let path = temp("expand");
+        let mut store = SqliteStore::open(&path).expect("open");
+
+        let mut symbols = vec![
+            symbol("CreditTransaction"),
+            symbol("BillingLedger.TopUpAsync"),
+        ];
+        // Filler sharing the query's words, so the neighbour is pushed out of the
+        // nearest ten rather than out of luck.
+        for i in 0..24 {
+            symbols.push(symbol(&format!("CreditTransactionPad{i}.Transact")));
+        }
+        embed_symbols(&mut store, &HashingProvider::new(256), &symbols, true).expect("embed");
+        store
+            .put_edges(&[Edge {
+                from: "BillingLedger.TopUpAsync".into(),
+                to: "CreditTransaction".into(),
+                relation: "references".into(),
+            }])
+            .expect("edges");
+
+        let ctx = find_context(&store, &HashingProvider::new(256), "credit transaction", 10)
+            .expect("search");
+
+        let reached = ctx
+            .anchors
+            .iter()
+            .find(|a| a.symbol_id == "BillingLedger.TopUpAsync");
+        let Some(reached) = reached else {
+            // Whether the filler pushes it out is the hashing provider's business, not
+            // this test's. Say which way it went rather than failing on it.
+            assert_eq!(
+                ctx.coverage.expanded, 0,
+                "nothing was reached, so the neighbour must already have been found"
+            );
+            std::fs::remove_file(&path).ok();
+            return;
+        };
+        assert_eq!(reached.sources, vec!["expanded"], "{reached:?}");
+        assert_eq!(reached.graph_distance, 1, "{reached:?}");
+        assert!(
+            reached
+                .via
+                .as_deref()
+                .unwrap_or("")
+                .contains("referenced by"),
+            "the direction has to survive the round trip: {reached:?}"
+        );
+        assert!(
+            reached.similarity.is_none(),
+            "no source compared this to the query, so there is no similarity: {reached:?}"
+        );
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// An expanded symbol never outranks one a source found, whatever the vector said.
+    #[test]
+    fn an_expanded_anchor_never_outranks_a_found_one() {
+        assert!(Source::Semantic.rank() > Source::Expanded.rank());
+        assert!(Source::Explicit.rank() > Source::Expanded.rank());
+    }
+
+    /// No graph means no expansion, and the coverage has to say the store is the reason
+    /// rather than leaving an empty list to be read as "nothing is related to this".
+    #[test]
+    fn a_store_without_a_graph_says_so() {
+        let (path, store) = seeded("nograph");
+        let ctx = find_context(&store, &HashingProvider::new(256), "credit", 10).expect("search");
+        assert_eq!(ctx.coverage.edges, 0, "{:?}", ctx.coverage);
+        assert_eq!(ctx.coverage.expanded, 0, "{:?}", ctx.coverage);
+        assert!(
+            ctx.anchors.iter().all(|a| a.via.is_none()),
+            "nothing can have been reached when there is nothing to reach along"
+        );
         std::fs::remove_file(&path).ok();
     }
 

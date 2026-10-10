@@ -13,6 +13,7 @@
 //!   distances are not comparable, so the store checks the name as well as the width.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 /// One row: a symbol and where it sits.
@@ -43,6 +44,22 @@ pub struct IndexInfo {
     pub entries: usize,
 }
 
+/// One directed edge in the code graph: `from` stands in `relation` `to`.
+///
+/// Separate from the vectors because it answers a different question. A vector answers
+/// "does this mean the same thing"; an edge answers "is this connected to that". Only
+/// the second one knows that a record and the method that charges a balance are related
+/// at all, and that is the relation a name search can never find -- measured, the query
+/// "charge a customer\'s credit balance" returned `CreditTransactionResult`, a noun,
+/// while `AddCreditCommandHandler.HandleAsync` sat sixth.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Edge {
+    pub from: String,
+    pub to: String,
+    /// `declares` for a type and its methods, `calls` for a call site.
+    pub relation: String,
+}
+
 /// A vector store.
 pub trait VectorStore {
     /// Create the schema if it is missing. Safe to call on an existing store.
@@ -68,6 +85,22 @@ pub trait VectorStore {
 
     /// Which backend this is, for the message when something is missing.
     fn kind(&self) -> &'static str;
+
+    /// Replace the graph with these edges.
+    ///
+    /// Replace, not merge: the graph describes the same project the vectors describe,
+    /// and a re-index that left the old edges behind would answer about a codebase that
+    /// no longer exists.
+    fn put_edges(&mut self, edges: &[Edge]) -> Result<(), String>;
+
+    /// The outgoing edges of each id, in one round trip.
+    ///
+    /// One, because expansion asks this about every anchor at once and Postgres charges
+    /// a network trip per call.
+    fn neighbours_of(&self, ids: &[&str]) -> Result<BTreeMap<String, Vec<Edge>>, String>;
+
+    /// How many edges the store holds. Zero on a store indexed before the graph existed.
+    fn edge_count(&self) -> Result<usize, String>;
 }
 
 /// Check a query against what the store holds, and say what is wrong.
@@ -157,7 +190,16 @@ impl VectorStore for SqliteStore {
                      dim       INTEGER NOT NULL,
                      vector    BLOB NOT NULL
                  );
-                 CREATE INDEX IF NOT EXISTS idx_vectors_dim ON vectors(dim);",
+                 CREATE INDEX IF NOT EXISTS idx_vectors_dim ON vectors(dim);
+                 -- `from_id` rather than `from`: FROM is a keyword, and quoting it in
+                 -- every query is a mistake waiting for the one place that forgets.
+                 CREATE TABLE IF NOT EXISTS graph (
+                     from_id   TEXT NOT NULL,
+                     to_id     TEXT NOT NULL,
+                     relation  TEXT NOT NULL,
+                     PRIMARY KEY (from_id, to_id, relation)
+                 );
+                 CREATE INDEX IF NOT EXISTS idx_graph_from ON graph(from_id);",
             )
             .map_err(|e| format!("cannot create the schema in {}: {e}", self.path.display()))
     }
@@ -187,7 +229,7 @@ impl VectorStore for SqliteStore {
     fn clear(&mut self) -> Result<(), String> {
         self.ensure_schema()?;
         self.conn
-            .execute_batch("DELETE FROM vectors; DELETE FROM meta;")
+            .execute_batch("DELETE FROM vectors; DELETE FROM graph; DELETE FROM meta;")
             .map_err(|e| e.to_string())
     }
 
@@ -325,6 +367,102 @@ impl VectorStore for SqliteStore {
         out.sort_by(|a, b| a.symbol_id.cmp(&b.symbol_id));
         Ok(out)
     }
+
+    fn put_edges(&mut self, edges: &[Edge]) -> Result<(), String> {
+        if edges.is_empty() {
+            return Ok(());
+        }
+        self.ensure_schema()?;
+        let tx = self.conn.transaction().map_err(|e| e.to_string())?;
+        {
+            let mut stmt = tx
+                .prepare(
+                    "INSERT INTO graph(from_id,to_id,relation) VALUES(?1,?2,?3)
+                     ON CONFLICT(from_id,to_id,relation) DO NOTHING",
+                )
+                .map_err(|e| e.to_string())?;
+            for edge in edges {
+                stmt.execute(rusqlite::params![&edge.from, &edge.to, &edge.relation])
+                    .map_err(|e| {
+                        format!("cannot write the edge {} -> {}: {e}", edge.from, edge.to)
+                    })?;
+            }
+        }
+        tx.commit().map_err(|e| e.to_string())
+    }
+
+    fn neighbours_of(&self, ids: &[&str]) -> Result<BTreeMap<String, Vec<Edge>>, String> {
+        let mut out: BTreeMap<String, Vec<Edge>> = BTreeMap::new();
+        if ids.is_empty() {
+            return Ok(out);
+        }
+        // Chunked rather than one statement with a parameter per id: SQLite's limit on
+        // bound variables is fixed and low enough that a long anchor list would fail,
+        // and failing on a long list is how a feature looks broken instead of bounded.
+        for chunk in ids.chunks(200) {
+            let placeholders = vec!["?"; chunk.len()].join(",");
+            // Both directions, normalised so `to` is always the neighbour and `from` is
+            // always the symbol asked about.
+            //
+            // One direction is not enough, and it fails in exactly the case expansion is
+            // for. A record like `Credit` has no outgoing calls -- nothing calls a record
+            // -- so following edges forwards from it finds nothing, while "which methods
+            // use this" is the question worth asking. Measured: the top three anchors for
+            // "charge a customer's credit balance" had zero edges in either direction
+            // before this, because only one direction was ever looked up.
+            // The direction comes back from the query rather than being re-derived from
+            // the two ids. Deriving it means comparing them, and when both ends are asked
+            // about that comparison cannot say which is which: the first version did
+            // exactly that and reversed every relation it was handed.
+            let sql = format!(
+                "SELECT from_id, to_id, relation, 0 FROM graph WHERE from_id IN ({placeholders}) \
+                 UNION ALL \
+                 SELECT to_id, from_id, relation, 1 FROM graph WHERE to_id IN ({placeholders})"
+            );
+            let mut stmt = self.conn.prepare(&sql).map_err(|e| e.to_string())?;
+            let rows = stmt
+                .query_map(
+                    rusqlite::params_from_iter(chunk.iter().chain(chunk.iter())),
+                    |r| {
+                        let from: String = r.get(0)?;
+                        let to: String = r.get(1)?;
+                        let relation: String = r.get(2)?;
+                        let reversed: i64 = r.get(3)?;
+                        Ok(Edge {
+                            // Only the relation carries the direction, so the caller never has
+                            // to re-derive it from the edge.
+                            relation: if reversed == 1 {
+                                reverse_relation(&relation)
+                            } else {
+                                relation
+                            },
+                            from,
+                            to,
+                        })
+                    },
+                )
+                .map_err(|e| e.to_string())?;
+            for edge in rows.flatten() {
+                if edge.from == edge.to {
+                    continue;
+                }
+                out.entry(edge.from.clone()).or_default().push(edge);
+            }
+        }
+        for edges in out.values_mut() {
+            // Sorted so the same query returns the same expansion twice.
+            edges.sort_by(|a, b| a.to.cmp(&b.to).then_with(|| a.relation.cmp(&b.relation)));
+        }
+        Ok(out)
+    }
+
+    fn edge_count(&self) -> Result<usize, String> {
+        Ok(self
+            .conn
+            .query_row("SELECT count(*) FROM graph", [], |r| r.get::<_, i64>(0))
+            .unwrap_or(0)
+            .max(0) as usize)
+    }
 }
 
 // ───────────────────────── postgres ─────────────────────────
@@ -374,6 +512,13 @@ impl PostgresStore {
 
     fn qualified(&self) -> String {
         format!("public.{}", self.table)
+    }
+
+    /// The graph lives beside the vectors rather than inside them: one project's
+    /// vectors and edges have the same lifetime, so a suffix on the same base name
+    /// keeps them together without a second table name to configure.
+    fn qualified_graph(&self) -> String {
+        format!("public.{}_graph", self.table)
     }
 }
 
@@ -432,6 +577,23 @@ impl VectorStore for PostgresStore {
                     e.as_db_error().map(|d| d.message()).unwrap_or("unknown")
                 )
             })?;
+
+        let graph = self.qualified_graph();
+        self.lock()?
+            .batch_execute(&format!(
+                "CREATE TABLE IF NOT EXISTS {graph} (
+                     from_id   TEXT NOT NULL,
+                     to_id     TEXT NOT NULL,
+                     relation  TEXT NOT NULL,
+                     PRIMARY KEY (from_id, to_id, relation)
+                 )"
+            ))
+            .map_err(|e| {
+                format!(
+                    "cannot create {graph}: {}",
+                    e.as_db_error().map(|d| d.message()).unwrap_or("unknown")
+                )
+            })?;
         Ok(())
     }
 
@@ -465,8 +627,9 @@ impl VectorStore for PostgresStore {
 
     fn clear(&mut self) -> Result<(), String> {
         let table = self.qualified();
+        let graph = self.qualified_graph();
         self.lock()?
-            .batch_execute(&format!("TRUNCATE {table}"))
+            .batch_execute(&format!("TRUNCATE {table}; TRUNCATE {graph}"))
             .map_err(|e| format!("cannot empty {table}: {e}"))
     }
 
@@ -598,6 +761,112 @@ impl VectorStore for PostgresStore {
             })
             .collect())
     }
+
+    fn put_edges(&mut self, edges: &[Edge]) -> Result<(), String> {
+        if edges.is_empty() {
+            return Ok(());
+        }
+        self.ensure_schema()?;
+        let graph = self.qualified_graph();
+
+        let mut guard = self.lock()?;
+        let mut client = guard.transaction().map_err(|e| e.to_string())?;
+        for edge in edges {
+            client
+                .execute(
+                    &format!(
+                        "INSERT INTO {graph} (from_id,to_id,relation) VALUES ($1,$2,$3)
+                         ON CONFLICT DO NOTHING"
+                    ),
+                    &[&edge.from, &edge.to, &edge.relation],
+                )
+                .map_err(|e| format!("cannot write the edge {} -> {}: {e}", edge.from, edge.to))?;
+        }
+        client.commit().map_err(|e| e.to_string())
+    }
+
+    fn neighbours_of(&self, ids: &[&str]) -> Result<BTreeMap<String, Vec<Edge>>, String> {
+        let mut out: BTreeMap<String, Vec<Edge>> = BTreeMap::new();
+        if ids.is_empty() {
+            return Ok(out);
+        }
+        let graph = self.qualified_graph();
+
+        // Chunked for the same reason SQLite is: a long anchor list must not depend on
+        // the parameter cap of whichever server happens to be there.
+        for chunk in ids.chunks(200) {
+            let mut params: Vec<&(dyn postgres::types::ToSql + Sync)> = Vec::new();
+            for id in chunk {
+                params.push(id);
+            }
+            let placeholders: Vec<String> = (1..=chunk.len()).map(|n| format!("${n}")).collect();
+            let sql = format!(
+                "SELECT from_id, to_id, relation, 0 FROM {graph} WHERE from_id IN ({fwd}) \
+                 UNION ALL \
+                 SELECT to_id, from_id, relation, 1 FROM {graph} WHERE to_id IN ({rev})",
+                fwd = placeholders.join(","),
+                rev = placeholders.join(",")
+            );
+            let both: Vec<&(dyn postgres::types::ToSql + Sync)> = params
+                .iter()
+                .copied()
+                .chain(params.iter().copied())
+                .collect();
+            let rows = self
+                .lock()?
+                .query(&sql, &both)
+                .map_err(|e| format!("query failed: {e}"))?;
+            for row in rows {
+                let from: String = row.get(0);
+                let to: String = row.get(1);
+                let relation: String = row.get(2);
+                let reversed: i32 = row.get(3);
+                if from == to {
+                    continue;
+                }
+                let edge = Edge {
+                    relation: if reversed == 1 {
+                        reverse_relation(&relation)
+                    } else {
+                        relation
+                    },
+                    from,
+                    to,
+                };
+                out.entry(edge.from.clone()).or_default().push(edge);
+            }
+        }
+        for edges in out.values_mut() {
+            edges.sort_by(|a, b| a.to.cmp(&b.to).then_with(|| a.relation.cmp(&b.relation)));
+        }
+        Ok(out)
+    }
+
+    fn edge_count(&self) -> Result<usize, String> {
+        let graph = self.qualified_graph();
+        Ok(self
+            .lock()?
+            .query_one(&format!("SELECT count(*) FROM {graph}"), &[])
+            .map_err(|e| format!("query failed: {e}"))?
+            .get::<_, i64>(0)
+            .max(0) as usize)
+    }
+}
+
+/// The same edge read the other way round, in words.
+///
+/// A relation is stored in one direction and looked up in two, so the answer has to say
+/// which way it is pointing. `caller --calls--> callee` becomes `callee --called by-->
+/// caller`: the store does not store a second edge, because one call site is one fact
+/// and storing it twice makes "how many call sites are there" wrong.
+fn reverse_relation(relation: &str) -> String {
+    match relation {
+        "declares" => "declared by",
+        "calls" => "called by",
+        "references" => "referenced by",
+        other => return format!("{other} (reverse)"),
+    }
+    .to_string()
 }
 
 /// A vector as pgvector's text form: `[1,2,3]`.
@@ -649,6 +918,118 @@ mod tests {
 
     fn provider() -> HashingProvider {
         HashingProvider::new(64)
+    }
+
+    fn with_edges(path: &Path) -> SqliteStore {
+        let mut store = SqliteStore::open(path).expect("open");
+        store.ensure_schema().expect("schema");
+        store
+            .put_edges(&[
+                Edge {
+                    from: "Handler".into(),
+                    to: "Record".into(),
+                    relation: "references".into(),
+                },
+                Edge {
+                    from: "Type".into(),
+                    to: "Handler".into(),
+                    relation: "declares".into(),
+                },
+            ])
+            .expect("edges");
+        store
+    }
+
+    /// Neighbours come back in both directions, and the relation says which way.
+    ///
+    /// One direction is not enough, and it fails on exactly the case expansion exists
+    /// for: a record has no outgoing calls, because nothing calls a record, while "which
+    /// methods use this" is the question worth asking.
+    #[test]
+    fn neighbours_come_back_from_both_ends() {
+        let path = temp_path("bothways");
+        let store = with_edges(&path);
+
+        let forward = store.neighbours_of(&["Handler"]).expect("query");
+        let mut got: Vec<(String, String)> = forward["Handler"]
+            .iter()
+            .map(|e| (e.to.clone(), e.relation.clone()))
+            .collect();
+        got.sort();
+        assert_eq!(
+            got,
+            vec![
+                // Stored `Handler references Record`, read forwards.
+                ("Record".to_string(), "references".to_string()),
+                // Stored `Type declares Handler`, read backwards, so it reads as what
+                // is true from here: the neighbour is the thing that declared this one.
+                ("Type".to_string(), "declared by".to_string()),
+            ],
+            "one direction was lost, or reversed, or both"
+        );
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// A symbol nobody is connected to gets an empty answer, not an error.
+    #[test]
+    fn a_symbol_with_no_edges_has_no_neighbours() {
+        let path = temp_path("noedges");
+        let store = with_edges(&path);
+        let got = store.neighbours_of(&["NothingHere"]).expect("query");
+        assert!(got.is_empty(), "{got:?}");
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// Asking about nothing is not a query.
+    #[test]
+    fn asking_about_nothing_costs_nothing() {
+        let path = temp_path("noids");
+        let store = with_edges(&path);
+        assert!(store.neighbours_of(&[]).expect("query").is_empty());
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// Writing the same edge twice is still one edge.
+    ///
+    /// A call site is one fact; storing it twice makes "how many edges are there" wrong,
+    /// which is the number the answer reports.
+    #[test]
+    fn the_same_edge_twice_is_still_one_edge() {
+        let path = temp_path("dupedge");
+        let mut store = with_edges(&path);
+        assert_eq!(store.edge_count().expect("count"), 2);
+        store
+            .put_edges(&[Edge {
+                from: "Handler".into(),
+                to: "Record".into(),
+                relation: "references".into(),
+            }])
+            .expect("edges");
+        assert_eq!(store.edge_count().expect("count"), 2);
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// Emptying the store empties the graph too. A re-index that left the edges behind
+    /// would answer about a codebase that no longer exists.
+    #[test]
+    fn clearing_removes_the_graph_as_well() {
+        let path = temp_path("cleargraph");
+        let mut store = with_edges(&path);
+        store.clear().expect("clear");
+        assert_eq!(store.edge_count().expect("count"), 0);
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// Reversing a relation produces words that read correctly in the answer.
+    #[test]
+    fn a_reversed_relation_reads_correctly() {
+        assert_eq!(reverse_relation("calls"), "called by");
+        assert_eq!(reverse_relation("declares"), "declared by");
+        assert_eq!(reverse_relation("references"), "referenced by");
+        assert_eq!(
+            reverse_relation("something else"),
+            "something else (reverse)"
+        );
     }
 
     #[test]

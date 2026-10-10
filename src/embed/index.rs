@@ -36,10 +36,11 @@ pub struct Symbol {
     /// Methods it calls, names only. Included in the text because a method is often
     /// found by what it touches rather than by what it is called.
     pub calls: Vec<String>,
-    /// The symbol's place in the call graph. Never embedded, never used for ranking
-    /// inside this module -- it travels with the symbol so the caller can rank on the
-    /// graph and use the vector only to find candidates.
-    pub graph: Option<Vec<String>>,
+    /// The other methods of the same type -- distance 1 in the containment graph.
+    ///
+    /// Kept on the symbol as well as in the store's edge table, because the edge table
+    /// can only be read after an index exists and this is what the index is built from.
+    pub siblings: Vec<String>,
 }
 
 impl Symbol {
@@ -284,6 +285,8 @@ pub struct ParseOutcome {
     pub failed: Vec<(String, String)>,
     /// Symbols the filter dropped: reason -> how many.
     pub excluded: Vec<(String, usize)>,
+    /// The code graph, for expansion at query time.
+    pub edges: Vec<super::store::Edge>,
 }
 
 impl ParseOutcome {
@@ -324,6 +327,8 @@ pub fn collect_symbols(root: &std::path::Path, filter: &super::filter::Filter) -
     use crate::resolve::symbols::SymbolTable;
 
     let mut symbols: BTreeMap<String, Symbol> = BTreeMap::new();
+    let mut edges: std::collections::BTreeSet<(String, String, String)> =
+        std::collections::BTreeSet::new();
     let mut failed = Vec::new();
     let mut excluded: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
     let files = csharp_files(root);
@@ -340,6 +345,7 @@ pub fn collect_symbols(root: &std::path::Path, filter: &super::filter::Filter) -
         };
         let namespace = read_namespace(&source);
 
+        // Needs the type graph, so it runs after the symbol table is built.
         let table = match SymbolTable::from_ast(tree.root_node(), &source) {
             Ok(t) => t,
             Err(e) => {
@@ -360,9 +366,14 @@ pub fn collect_symbols(root: &std::path::Path, filter: &super::filter::Filter) -
                 display.clone()
             };
 
+            // Constructors excluded here as well as below. Leaving them in produced
+            // 1,467 edges pointing at symbols the index does not hold -- 11% of the
+            // containment graph was dangling, and a neighbour lookup that resolves to
+            // something the answer cannot show is worse than no edge at all.
             let method_ids: Vec<String> = info
                 .methods
                 .iter()
+                .filter(|m| m.method != ".ctor")
                 .map(|m| format!("{class_name}.{}", m.method))
                 .collect();
 
@@ -384,12 +395,6 @@ pub fn collect_symbols(root: &std::path::Path, filter: &super::filter::Filter) -
                     continue;
                 }
                 let id = format!("{class_name}.{}", method.method);
-                let callees: Vec<String> = info
-                    .fields
-                    .iter()
-                    .filter(|f| f.name.contains(&method.method))
-                    .map(|f| f.name.clone())
-                    .collect();
                 symbols.entry(id.clone()).or_insert_with(|| Symbol {
                     id,
                     kind: "method".into(),
@@ -400,10 +405,10 @@ pub fn collect_symbols(root: &std::path::Path, filter: &super::filter::Filter) -
                     containing_type: Some(class_name.clone()),
                     namespace: namespace.clone(),
                     doc: None,
-                    calls: callees,
-                    // Kept out of the rendered text but recorded, because a symbol's
-                    // position in the graph is what ranking is built from.
-                    graph: Some(method_ids.clone()),
+                    // Filled in from the call sites once every file has been walked; the
+                    // call graph is project-wide and this loop is not.
+                    calls: Vec::new(),
+                    siblings: method_ids.clone(),
                 });
             }
 
@@ -419,8 +424,117 @@ pub fn collect_symbols(root: &std::path::Path, filter: &super::filter::Filter) -
                 namespace: namespace.clone(),
                 doc: None,
                 calls: Vec::new(),
-                graph: Some(method_ids),
+                siblings: method_ids,
             });
+        }
+    }
+
+    // The call graph, from the project loader rather than from the loop above.
+    //
+    // Measured, and the reason is worth keeping: built per file against a per-file type
+    // graph, the same project yielded 784 call edges of which 777 were inside a single
+    // class and only 7 crossed between types. A type graph that cannot see the other
+    // 1,666 files resolves every bare method name to the class it happens to share a file
+    // with, which is not a call graph. The project loader sees all of them and finds
+    // 29,896 call sites instead. It costs 0.90s on 1,721 files -- indexing spends its
+    // seconds on the embedding calls, not the parse -- so the second parse is worth a
+    // graph that means something.
+    //
+    // Failure degrades to containment-only rather than failing the index: half a graph
+    // is better than no index.
+    let project = crate::cli::commands::load_project(root).ok();
+    let sites: Vec<crate::analysis::callgraph::CallSite> = project
+        .as_ref()
+        .map(|(_, call_graph)| call_graph.calls.clone())
+        .unwrap_or_default();
+
+    // Callees, from the call sites collected above.
+    //
+    // `callee` is the bare method name; `callee_class` is the owner the type graph
+    // resolved it to, and it is empty when resolution failed. A callee whose class is
+    // unknown is kept under its bare name rather than dropped and rather than guessed:
+    // it is still a true statement about what this method touches, and guessing a class
+    // would put a distance on the guess.
+    let mut callees: std::collections::HashMap<String, std::collections::BTreeSet<String>> =
+        std::collections::HashMap::new();
+    for site in &sites {
+        if site.callee.is_empty() || site.caller_method == ".ctor" {
+            continue;
+        }
+        let from = format!("{}.{}", site.caller_class, site.caller_method);
+        let to = if site.callee_class.is_empty() {
+            site.callee.clone()
+        } else {
+            format!("{}.{}", site.callee_class, site.callee)
+        };
+        callees.entry(from).or_default().insert(to);
+    }
+
+    for symbol in symbols.values_mut() {
+        if let Some(set) = callees.get(&symbol.id) {
+            symbol.calls = set.iter().cloned().collect();
+        }
+    }
+
+    // The graph. Two relations, because they answer different questions: `declares` is
+    // containment and is always certain, `calls` is the call graph and is only as good
+    // as the type resolution behind it.
+    for (id, symbol) in &symbols {
+        for sibling in &symbol.siblings {
+            edges.insert((id.clone(), sibling.clone(), "declares".into()));
+        }
+    }
+    for site in &sites {
+        if site.callee.is_empty() || site.caller_method == ".ctor" {
+            continue;
+        }
+        let from = format!("{}.{}", site.caller_class, site.caller_method);
+        let to = if site.callee_class.is_empty() {
+            site.callee.clone()
+        } else {
+            format!("{}.{}", site.callee_class, site.callee)
+        };
+        // Only edges between indexed symbols, and never a self-edge. A dangling edge
+        // expands to something the answer cannot show, and a self-edge expands a symbol
+        // to itself: both look like the graph worked and neither tells anyone anything.
+        // 23 of them on a 4,141-symbol index.
+        if from != to && symbols.contains_key(&from) && symbols.contains_key(&to) {
+            edges.insert((from, to, "calls".into()));
+        }
+    }
+
+    // Who uses this type.
+    //
+    // This is the relation that makes expansion worth having. Measured: the winning
+    // anchor for "charge a customer's credit balance" was `CreditTransaction`, a record
+    // with no methods and no callers, and it had *zero* edges in either direction --
+    // because nothing calls a record. But it is used, and by exactly the right thing:
+    //
+    //   Billing.Processing/UseCases/Commands/AddCreditCommand.cs:25
+    //     IDatabaseRepository<CreditTransaction> transactionRepository
+    //   Billing.Processing/UseCases/Commands/AddCreditCommand.cs:84
+    //     var transaction = new CreditTransaction
+    //
+    // A call graph cannot see either line: one is a parameter type, the other an
+    // allocation. Type usage is the edge that connects a noun to the verb that works on
+    // it, and without it expansion has nothing to say about the records and DTOs that
+    // half of every search result is made of.
+    if let Some((type_graph, call_graph)) = &project {
+        for (class, created) in &call_graph.class_creations {
+            for created in created {
+                if symbols.contains_key(class) && symbols.contains_key(created) {
+                    edges.insert((class.clone(), created.clone(), "references".into()));
+                }
+            }
+        }
+        for (class, info) in &type_graph.classes {
+            for field in &info.fields {
+                for named in named_types(&field.field_type) {
+                    if named != *class && symbols.contains_key(&named) {
+                        edges.insert((class.clone(), named, "references".into()));
+                    }
+                }
+            }
         }
     }
 
@@ -429,7 +543,60 @@ pub fn collect_symbols(root: &std::path::Path, filter: &super::filter::Filter) -
         files: files.len(),
         failed,
         excluded: excluded.into_iter().collect(),
+        edges: edges
+            .into_iter()
+            .map(|(from, to, relation)| super::store::Edge { from, to, relation })
+            .collect(),
     }
+}
+
+/// The type names a declared type mentions, without the generics around them.
+///
+/// `IReadOnlyList<CreditTransaction>` names `CreditTransaction`, and it is the one worth
+/// an edge: the wrapper is a standard type that half the project mentions, so an edge to
+/// it says nothing, while the argument says which record this class actually holds.
+fn named_types(declared: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut rest = declared.trim();
+    while let Some(open) = rest.find(['<', '[', '(']) {
+        let inner = &rest[open + 1..];
+        let close = match rest.as_bytes()[open] {
+            b'<' => inner.find('>'),
+            b'[' => inner.find(']'),
+            _ => inner.find(')'),
+        };
+        let Some(end) = close else { break };
+        for part in inner[..end].split(',') {
+            let name = part.trim().rsplit('.').next().unwrap_or("").trim();
+            if !name.is_empty() {
+                out.push(name.to_string());
+            }
+        }
+        rest = &inner[end + 1..];
+    }
+    let bare = rest
+        .trim()
+        .rsplit('.')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if !bare.is_empty() && !out.contains(&bare) {
+        out.push(bare);
+    }
+    // A declared type can carry modifiers and nullable marks. Whatever is left after
+    // dropping them is a name a class could be called; anything else is punctuation the
+    // store would never match against a symbol.
+    //
+    // The `?` comes off first and not in the same pass. It is not rare punctuation --
+    // nullable reference types are ordinary C# -- and testing for a valid name before
+    // dropping the mark throws the whole name away instead of the mark, which looks
+    // exactly like the type being unused.
+    for n in &mut out {
+        *n = n.trim_end_matches('?').to_string();
+    }
+    out.retain(|n| !n.is_empty() && n.chars().all(|c| c.is_alphanumeric() || c == '_'));
+    out
 }
 
 /// The file's namespace, or the empty string.
@@ -465,6 +632,9 @@ pub fn index_project(
 ) -> Result<IndexReport, String> {
     let outcome = collect_symbols(path, filter);
     let mut report = embed_symbols(store, provider, &outcome.symbols, reset)?;
+    // After the vectors, not before: a graph with no vectors to expand towards is a
+    // table nobody reads.
+    store.put_edges(&outcome.edges)?;
     report.files = outcome.files;
     // Reported rather than thrown: a handful of unparseable files in a repository is
     // normal, and refusing to index the other two hundred is not useful.
@@ -509,8 +679,50 @@ mod tests {
             namespace: String::new(),
             doc: None,
             calls: Vec::new(),
-            graph: None,
+            siblings: Vec::new(),
         }
+    }
+
+    /// The argument of a generic is the type worth an edge; the wrapper is not.
+    ///
+    /// `IReadOnlyList<CreditTransaction>` says this class holds a `CreditTransaction`.
+    /// An edge to `IReadOnlyList` would say every collection in the project uses it,
+    /// which is true of all of them and therefore true of none.
+    #[test]
+    fn a_generic_argument_is_the_type_worth_naming() {
+        assert_eq!(
+            named_types("IReadOnlyList<CreditTransaction>"),
+            vec!["CreditTransaction"]
+        );
+        assert_eq!(
+            named_types("Dictionary<string, CreditTransaction>"),
+            vec!["string", "CreditTransaction"]
+        );
+        assert_eq!(named_types("List<Credit>[]"), vec!["Credit"]);
+    }
+
+    /// A namespace is stripped: the symbol table is keyed by the bare name.
+    #[test]
+    fn a_namespace_is_not_part_of_the_name() {
+        assert_eq!(
+            named_types("Billing.Database.Models.Credit"),
+            vec!["Credit"]
+        );
+        assert_eq!(named_types("  Credit  "), vec!["Credit"]);
+    }
+
+    /// `Credit?` is a `Credit`. Dropping the nullable mark would lose the edge; keeping
+    /// it would write a name no class is called.
+    #[test]
+    fn a_nullable_mark_does_not_hide_the_type() {
+        assert_eq!(named_types("CreditTransaction?"), vec!["CreditTransaction"]);
+        assert_eq!(named_types("global::System.Guid"), vec!["Guid"]);
+    }
+
+    #[test]
+    fn a_type_with_nothing_inside_yields_nothing() {
+        assert!(named_types("").is_empty());
+        assert!(named_types("   ").is_empty());
     }
 
     #[test]
