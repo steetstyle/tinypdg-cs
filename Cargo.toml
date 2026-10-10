@@ -41,6 +41,14 @@ default = []
 mcp = ["dep:rmcp", "dep:tokio", "dep:schemars"]
 mcp-http = ["mcp", "rmcp/transport-streamable-http-server", "dep:axum"]
 
+# The HTTP transport test needs the transport. Without `required-features` the target is
+# compiled by a bare `cargo test` and fails with "could not find `streamable_http_server`
+# in `transport`" -- which is how the no-mcp job went red on every push while nothing
+# else in the repository had changed.
+[[test]]
+name = "mcp_http_test"
+required-features = ["mcp-http"]
+
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
 insta = "1"

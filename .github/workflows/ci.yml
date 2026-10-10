@@ -89,12 +89,17 @@ jobs:
           # the branch head: the two produce identical output while the repository is
           # unchanged, which is exactly the case that matters.
           #
-          # The path comes from the tool's own line rather than a glob. The cache
-          # directory is a readable prefix plus a hash of the full reference, and the
-          # readable part is truncated, so a glob on the sha does not match -- which is
-          # a failure that only shows up once the sha is long enough.
-          DIR=$(./target/release/tiny-pdg-cs detect "gh:steetstyle/tinypdg-cs@$SHA" 2>&1 \
-                | sed -n 's/^fetched .* -> //p' | tail -1)
+          # The path comes from `where`, which answers whether or not it had to fetch.
+          # Reading it out of detect's output was the previous way and it was wrong in a
+          # way that only CI could hit: `announce` says nothing on a cache hit, on
+          # purpose, so the second call for a reference -- which the step above has
+          # already fetched -- reported no path at all. `where` is asked the question
+          # directly instead of inferred from a message that was never going to come.
+          #
+          # Not a glob: the cache directory is a readable prefix plus a hash of the full
+          # reference, and the readable part is truncated, so a glob on the sha does not
+          # match -- a failure that only shows up once the sha is long enough.
+          DIR=$(./target/release/tiny-pdg-cs where "gh:steetstyle/tinypdg-cs@$SHA")
           if [ -z "$DIR" ]; then
             echo "the tool did not report where it fetched to"
             exit 1

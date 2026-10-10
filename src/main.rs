@@ -85,6 +85,11 @@ enum Commands {
         #[arg(help = "Path to .cs file or project directory")]
         path: String,
     },
+    /// Print where a source reference resolves to, and nothing else
+    Where {
+        #[arg(help = "A directory, or gh:owner/repo@ref[:subpath]")]
+        spec: String,
+    },
     /// Serve static code analysis over MCP for AI agents
     Serve {
         /// Serve over Streamable HTTP instead of stdio
@@ -181,6 +186,15 @@ fn main() {
         }
         Commands::Detect { path } => {
             tiny_pdg_cs::cli::commands::handle_detect(&source_arg(&path, true)?)
+        }
+        Commands::Where { spec } => {
+            // announce() first, so a reference nobody has fetched still says it fetched.
+            // It says nothing on a cache hit on purpose -- printing on every invocation
+            // is how a useful message becomes noise -- which is why this command exists:
+            // without it there is no way to ask where a reference resolved.
+            tiny_pdg_cs::source::announce(&spec);
+            println!("{}", tiny_pdg_cs::source::resolve(&spec)?.dir.display());
+            Ok(())
         }
         Commands::Callgraph {
             path,
